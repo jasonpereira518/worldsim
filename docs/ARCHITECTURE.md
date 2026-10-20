@@ -1,6 +1,6 @@
 # Worldsim — Architecture v0
 
-Status: Milestone 0. Simulated today (t0) is Tuesday 2026-10-20. Every output is labeled a simulation, not a forecast or advice.
+Status: Milestone 1 (data layer v1). Simulated today (t0) is Tuesday 2026-10-20. Every output is labeled a simulation, not a forecast or advice.
 
 ## 1. Principles
 
@@ -21,7 +21,13 @@ apps/web/                 Next.js 16 · TypeScript · Tailwind v4 · MapLibre GL
   data/                   places.json (Natural Earth populated places) + catalog.json (provenance)
   scripts/fetch-places.mjs  seed ETL: download → normalize → data/places.json
 services/sim/             M1+  FastAPI: engine, domain modules, persona cognition, reporter
-data/pipeline/            M1+  Dagster ETL → Postgres/PostGIS + Parquet (DuckDB), catalog with provenance
+data/pipeline/            M1   Python ETL (stdlib + DuckDB): one job per source → validated Parquet snapshot, catalog with provenance
+  schema.sql              logical schema = data contract (NOT NULL provenance, ISO3/range CHECKs)
+  jobs/                   naturalearth.py, worldbank.py, companies.py (Wikidata, GLEIF, SEC EDGAR)
+  tests/                  test_loader.py (offline), test_contracts.py (per source, latest snapshot)
+data/snapshots/<date>/    *.parquet + manifest.json; LATEST names the current snapshot (generated, gitignored)
+data/cache/               last good response per request, the fallback when a source is down (gitignored)
+apps/web/src/lib/data/    store.ts (DuckDB over the latest snapshot), types.ts (read API contracts)
 docs/                     this file, DESIGN.md, DEMO-M0.md
 ```
 
@@ -95,7 +101,12 @@ GET  /api/runs/{id}/stream     text/event-stream
        event: summary    data: Summary                         at the end
        event: done | error
 POST /api/runs/{id}/chat       {message} → {reply, action?}    action: {type:'zoom', center, zoom} | {type:'branch', run_id}
-GET  /api/data/catalog         → DataCatalogEntry[]
+GET  /api/data/catalog         → DataCatalogEntry[]          as_of, retrieved, license, confidence, fetch_status, freshness, stale_reason
+GET  /api/data/countries       → {snapshot_id, countries: CountrySummary[]}
+GET  /api/data/countries/{iso3}[?series=1] → CountryProfile  every value {…, source, as_of, confidence, license, retrieved}; `missing[]`
+GET  /api/data/companies       → {snapshot_id, companies: CompanySummary[]}
+GET  /api/data/companies/{ref} → CompanyProfile              ref = id | QID | LEI | ticker | unique id prefix; `missing[]`
+                               data routes: 404 unknown, 400 malformed, 503 before the first snapshot
 GET  /api/runs/{id}/report.md | .pdf        (M4)
 ```
 
@@ -148,11 +159,42 @@ Acceptance
 
 ## 9. Milestones 1–5
 
-1. Data layer v1: World Bank WDI, UN WPP, Natural Earth admin-0/1, GLEIF + Wikidata + EDGAR for ~500 companies; Postgres/PostGIS + Parquet; catalog with provenance; freshness jobs.
+1. **Done.** Data layer v1: World Bank WDI, UN WPP, Natural Earth admin-0/1, GLEIF + Wikidata + EDGAR for ~500 companies; Postgres/PostGIS + Parquet; catalog with provenance; freshness jobs. See "M1 as built" below and `docs/DEMO-M1.md`.
 2. FastAPI service; LLM scenario parser with JSON-schema outputs; persona generator from real distributions; product-launch module (Bass diffusion × price elasticity × supply); persona cognition with a budget manager; summary report. Walkthrough A end to end.
 3. Epidemiology (age-structured SEIRD + air-travel coupling), disaster, macro/supply-chain modules; networks layer; ensembles (20–100 runs) with 50/90% bands; deck.gl for arcs and particles.
 4. Branching, compare view, real-time feeds (GDELT, markets, USGS, WHO DON), generic fallback module, PDF/Markdown export, shareable links.
 5. Calibration and backtests against analogs, performance tuning, accessibility audit, docs.
+
+### M1 as built
+
+`python -m pipeline run` (in `data/`) runs seven jobs, one per source, and publishes snapshot `data/snapshots/<YYYY-MM-DD>/`:
+
+| Job (catalog id) | Source · license | Tables | Rows (2026-10-20) |
+|---|---|---|---|
+| `ne_admin0_50m` | Natural Earth v5.1.2 · public domain | `countries` (ISO3 key, centroid, label point, GeoJSON boundary) | 237 countries and territories |
+| `ne_admin1_10m` | Natural Earth v5.1.2 · public domain | `admin1` | 4,567 regions |
+| `wb_wdi` | World Bank WDI · CC BY 4.0 | `indicators` (long format: iso3 × indicator × year, 2000–2025, 53 series) | 284,050 observations, 216 economies |
+| `wb_classification` | World Bank Country API · CC BY 4.0 | `country_groups` (income group, region, lending type) | 648 |
+| `wikidata_companies` | Wikidata · CC0 | `companies`, `company_sites` (HQ with coordinates) | 500 companies; 499 with headcount, 498 with HQ coordinates, 483 with a ticker |
+| `gleif_lei` | GLEIF · CC0 | `company_legal`, `company_sites` (HQ and legal addresses) | 421 legal entities (the companies with an LEI on Wikidata) |
+| `sec_edgar_companyfacts` | SEC EDGAR · public domain | `company_financials` (revenue, net income, cash, long-term debt, headcount; latest annual filing) | 2,500 rows: revenue for 185 of the 225 companies with a CIK; the rest labeled missing with a reason |
+
+- **Provenance and contract.** Every row carries `source, as_of, confidence, license, retrieved`. `schema.sql` enforces it (NOT NULL, CHECKs on ISO3, confidence, coordinate ranges, "value or missing_reason"); a violating snapshot is never published. `pytest` contract tests then check coverage and plausible ranges per source.
+- **Missing, never guessed.** Indicators are stored only where observed; the API lists unobserved keys in `missing`. GLEIF and EDGAR are joined only on the LEI and CIK recorded in Wikidata (no name matching); a company without one gets explicit `missing` entries with the reason.
+- **Freshness.** Each request is cached (`data/cache/`). If a live fetch fails the job uses the last good copy and reports `cached`; if some records have neither it reports `partial`; with nothing at all it is `unavailable` and its tables are empty. The catalog stores the status, retrieval time and refresh window (`max_age_days`); `/api/data/catalog` and `python -m pipeline status` flag stale entries. Schedule `python -m pipeline run` (cron, or a CI job) as the freshness job.
+- **Read path.** `apps/web/src/lib/data/store.ts` opens the Parquet files of `data/snapshots/LATEST` with DuckDB (`@duckdb/node-api`, server-external) and re-points its views when LATEST changes, so a new snapshot is live without a restart.
+
+Deviations from the plan above, with the reason:
+
+1. **No Postgres/PostGIS yet.** No Postgres in the dev environment, so the store is Parquet + DuckDB for every table (the brief's stated fallback). `schema.sql` is Postgres-portable (swap `regexp_full_match` for `~`, GeoJSON text for `geometry`); move entities to Postgres/PostGIS when the FastAPI service needs spatial queries or writes (M2+).
+2. **No Dagster.** Seven plain job functions and a CLI; dependencies between jobs are explicit (`ctx`). Revisit if jobs need independent schedules.
+3. **UN WPP via WDI.** Age structure uses the WPP five-year band shares that WDI republishes (`SP.POP.<band>.FE/MA.5Y`) × female/male totals, not a WPP bulk download.
+4. **Company selection.** The ~500 are the listed, non-dissolved companies with the most employees on Wikidata, plus the 11 reference-walkthrough companies. Forbes Global 2000 is not openly licensed. Financials stay in the reported currency (no FX conversion yet).
+5. **Admin-1 at 1:10m.** The 1:50m admin-1 layer covers only a handful of countries. Conversely, Gibraltar (GIB) has World Bank data but no 1:50m admin-0 shape, so `/api/data/countries/GIB` is a 404 until boundaries move to 1:10m.
+6. **The mock engine still runs on M0 data.** Runs keep `data_snapshot: 'm0-natural-earth-5.1.1'`; the engine reads the store from M2.
+7. **Pydantic mirror deferred.** The JSON-schema contract test between `types.ts` and Python models moves to M2 with the FastAPI service. The read API contracts live in `apps/web/src/lib/data/types.ts`.
+8. **Snapshots are generated, not committed.** `data/snapshots/` and `data/cache/` are gitignored; data tests (pytest contracts, vitest route/store) skip until a snapshot exists.
+9. **Wikidata query shape.** Six flat SPARQL queries for all companies at once: the query service overflowed on GROUP BY over a large VALUES block, and it rate-limits bursts (down to 1 request/minute during incidents), which the fetcher honors via `Retry-After`.
 
 ## 10. Open decisions
 

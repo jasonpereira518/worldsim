@@ -9,6 +9,8 @@ export default function TopBar() {
   const runStatus = useStore((s) => s.runStatus);
   const theme = useStore((s) => s.theme);
   const setTheme = useStore((s) => s.setTheme);
+  const dataOpen = useStore((s) => s.dataDrawerOpen);
+  const setDataOpen = useStore((s) => s.setDataDrawerOpen);
   const date = frames[playhead]?.date ?? spec?.start_date ?? '2026-10-20';
   const btn = 'rounded-full border border-line px-2.5 py-1 text-[12px] hover:bg-surface disabled:opacity-40 disabled:hover:bg-transparent';
 
@@ -21,6 +23,7 @@ export default function TopBar() {
       <div className="flex items-center gap-1.5">
         <button className={btn} disabled={runStatus !== 'streaming'} onClick={stopRun} title="Stop early and keep what was simulated">Stop</button>
         <button className={btn} disabled={!spec} onClick={() => spec && submitPrompt(spec.prompt)} title="Restart this scenario">Restart</button>
+        <button className={btn} onClick={() => setDataOpen(!dataOpen)} aria-pressed={dataOpen} title="Data sources, freshness and assumptions (/sources)">Data</button>
         <button className={btn} disabled title="Export (PDF/Markdown) arrives in Milestone 4">Export</button>
         <button className={btn} onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} aria-pressed={theme === 'dark'} title="Toggle dark mode">{theme === 'dark' ? 'Light' : 'Dark'}</button>
       </div>

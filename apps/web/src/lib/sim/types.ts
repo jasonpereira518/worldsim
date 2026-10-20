@@ -207,14 +207,25 @@ export type ServerEvent =
   | { type: 'done' }
   | { type: 'error'; message: string };
 
-export interface DataCatalogEntry extends Provenance {
+/** One dataset in the store (GET /api/data/catalog). as_of/retrieved are null only when the source is unavailable. */
+export interface DataCatalogEntry extends Omit<Provenance, 'as_of'> {
   id: string;
   name: string;
   url: string;
-  retrieved?: string;
+  as_of: string | null;
+  retrieved: string | null;
   fields: string[];
   used_for: string;
-  note?: string;
+  note: string | null;
+  /** live: fetched now · cached: last good copy after a failed fetch · partial: some records missing · external: maintained outside the pipeline */
+  fetch_status: 'live' | 'cached' | 'partial' | 'unavailable' | 'external';
+  max_age_days: number;
+  rows: number;
+  error: string | null;
+  snapshot_id: string;
+  freshness: 'fresh' | 'stale' | 'unavailable';
+  stale: boolean;
+  stale_reason: string | null;
 }
 
 export interface ChatAction {

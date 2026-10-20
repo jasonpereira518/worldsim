@@ -36,6 +36,7 @@ export interface WorldsimState {
   layers: Layers;
   filters: Filters;
   selectedPersonaId: string | null;
+  dataDrawerOpen: boolean;
   chatTab: 'chat' | 'voices';
   sheetOpen: boolean;
   messages: ChatMessage[];
@@ -47,6 +48,7 @@ export interface WorldsimState {
   toggleLayer(k: keyof Layers): void;
   setFilters(f: Partial<Filters>): void;
   selectPersona(id: string | null): void;
+  setDataDrawerOpen(open: boolean): void;
   setPlayhead(t: number): void;
   setPlaying(p: boolean): void;
   setSpeed(s: Speed): void;
@@ -73,6 +75,7 @@ export const useStore = createStore<WorldsimState>((set, get) => ({
   theme: 'light',
   layers: { dots: true, institutions: true, flows: true, bubbles: true },
   filters: { country: 'all', kind: 'all', sentiment: 'all' },
+  dataDrawerOpen: false,
   chatTab: 'chat',
   sheetOpen: false,
   messages: [],
@@ -85,7 +88,9 @@ export const useStore = createStore<WorldsimState>((set, get) => ({
   },
   toggleLayer: (k) => set((s) => ({ layers: { ...s.layers, [k]: !s.layers[k] } })),
   setFilters: (f) => set((s) => ({ filters: { ...s.filters, ...f } })),
-  selectPersona: (id) => set({ selectedPersonaId: id }),
+  // the persona drawer and the data drawer share the right edge of the map: opening one closes the other
+  selectPersona: (id) => set(id ? { selectedPersonaId: id, dataDrawerOpen: false } : { selectedPersonaId: null }),
+  setDataDrawerOpen: (open) => set(open ? { dataDrawerOpen: true, selectedPersonaId: null } : { dataDrawerOpen: false }),
   setPlayhead: (t) => set((s) => ({ playhead: Math.max(0, Math.min(t, s.frames.length - 1)) })),
   setPlaying: (playing) => set({ playing }),
   setSpeed: (speed) => set({ speed }),

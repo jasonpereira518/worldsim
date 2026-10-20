@@ -7,6 +7,7 @@ import Timeline from './Timeline';
 import LayerPills from './LayerPills';
 import ChatPanel from './ChatPanel';
 import PersonaDrawer from './PersonaDrawer';
+import DataDrawer from './DataDrawer';
 
 /** Client-side playback clock: 1× = 2 simulation steps per second. */
 function usePlayback() {
@@ -34,12 +35,12 @@ function useKeyboard() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
-      if (/^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(t.tagName) || t.isContentEditable || t.classList?.contains('maplibregl-canvas')) return;
       const s = useStore.getState();
+      if (e.key === 'Escape') { s.selectPersona(null); s.setDataDrawerOpen(false); return; } // closes drawers from anywhere
+      if (/^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(t.tagName) || t.isContentEditable || t.classList?.contains('maplibregl-canvas')) return;
       if (e.code === 'Space') { e.preventDefault(); s.setPlaying(!s.playing); }
       else if (e.key === 'ArrowRight') s.step(1);
       else if (e.key === 'ArrowLeft') s.step(-1);
-      else if (e.key === 'Escape') s.selectPersona(null);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -61,6 +62,7 @@ export default function App() {
           <MapView />
           <LayerPills />
           <PersonaDrawer />
+          <DataDrawer />
           <Timeline />
         </section>
         <aside aria-label="Chat" className={`absolute inset-x-0 bottom-0 z-30 flex flex-col border-t border-line bg-bg transition-[height] duration-200 md:static md:h-auto md:w-[30%] md:min-w-[320px] md:max-w-[460px] md:border-l md:border-t-0 ${sheetOpen ? 'h-[55%]' : 'h-11'}`}>

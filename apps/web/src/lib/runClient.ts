@@ -75,8 +75,12 @@ async function slash(cmd: string) {
       if (!s.spec) return say('No scenario yet. Describe an event first.');
       return s.addMessage({ role: 'assistant', kind: 'list', items: s.spec.assumptions.map((a) => `${a.text} — ${a.origin}, ${a.confidence} confidence`) });
     case '/sources': {
-      const catalog = (await (await fetch('/api/data/catalog')).json()) as DataCatalogEntry[];
-      return s.addMessage({ role: 'assistant', kind: 'list', items: [...catalog.map((c) => `${c.name} — ${c.source}, as of ${c.as_of}, ${c.license}, ${c.confidence} confidence. Used for: ${c.used_for}`), 'Basemap: OpenFreeMap vector tiles (OpenMapTiles schema, © OpenStreetMap contributors, ODbL)'] });
+      s.setDataDrawerOpen(true);
+      const res = await fetch('/api/data/catalog');
+      if (!res.ok) return say(`Opened Data & assumptions. The catalog is not available yet (${res.status}).`);
+      const catalog = (await res.json()) as DataCatalogEntry[];
+      const stale = catalog.filter((c) => c.stale);
+      return say(`Opened Data & assumptions: ${catalog.length} sources, snapshot ${catalog[0]?.snapshot_id}. ${stale.length ? `Stale: ${stale.map((c) => c.name).join('; ')}.` : 'All fresh.'}`);
     }
     case '/reset': stopRun(); s.reset(); return say('Cleared. Describe a new event to simulate.');
     case '/compare': case '/export': return say(`${name} arrives in Milestone 4 (branching, compare view, PDF/Markdown export).`);
