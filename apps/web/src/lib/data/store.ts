@@ -188,3 +188,13 @@ export async function getCompany(ref: string): Promise<CompanyProfile | null> {
     missing,
   };
 }
+
+/** Country polygons (Natural Earth admin-0, 1:50m) as a GeoJSON FeatureCollection keyed by iso3, for choropleths. */
+export async function getCountryShapes(): Promise<GeoJSON.FeatureCollection & { snapshot_id: string }> {
+  const { rows, snapshot } = await query<{ iso3: string; name: string; geometry: string }>('SELECT iso3, name, geometry FROM countries ORDER BY iso3');
+  return {
+    type: 'FeatureCollection',
+    snapshot_id: snapshot,
+    features: rows.map((r) => ({ type: 'Feature', id: r.iso3, properties: { iso3: r.iso3, name: r.name }, geometry: JSON.parse(r.geometry) })),
+  };
+}

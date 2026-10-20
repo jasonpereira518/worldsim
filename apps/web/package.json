@@ -10,7 +10,8 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "predev": "node scripts/copy-worker.mjs",
-    "prebuild": "node scripts/copy-worker.mjs"
+    "prebuild": "node scripts/copy-worker.mjs",
+    "sim": "cd ../../services/sim && .venv/bin/python -m uvicorn worldsim.api:app --host 127.0.0.1 --port 8731"
   },
   "dependencies": {
     "@duckdb/node-api": "^1.5.6-r.1",

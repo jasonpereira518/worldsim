@@ -1,0 +1,76 @@
+{
+ "module": "disaster",
+ "ensemble": 8,
+ "median_member": 3,
+ "metrics": {
+  "Deaths": [
+   42025.4749,
+   116280.3102,
+   233569.6893,
+   414717.2561,
+   587950.1405
+  ],
+  "Injured": [
+   152821.624,
+   622991.3167,
+   957836.266,
+   1630129.7269,
+   2359818.8836
+  ],
+  "Displaced at peak": [
+   3397197.1852,
+   3872562.4405,
+   4276517.8848,
+   5242844.2073,
+   5960680.2012
+  ],
+  "People exposed to damaging shaking (MMI ≥ 7)": [
+   11553000.0,
+   11553000.0,
+   11553000.0,
+   11553000.0,
+   11553000.0
+  ],
+  "Direct economic loss": [
+   85.5352,
+   100.7253,
+   102.7904,
+   105.3285,
+   118.3349
+  ],
+  "Direct loss, share of national GDP": [
+   7.6817,
+   9.0458,
+   9.2313,
+   9.4592,
+   10.6273
+  ],
+  "Days to restore 90% of utilities": [
+   21.75,
+   28.0,
+   44.0,
+   46.25,
+   54.55
+  ],
+  "Peak people without shelter": [
+   2450582.8357,
+   3210991.2519,
+   3384576.4329,
+   3473605.239,
+   4063634.8311
+  ]
+ },
+ "events": [
+  "M8.1 earthquake near Istanbul",
+  "Severe shaking (MMI ≥ 8) in 1 places",
+  "Death toll passes 100",
+  "Death toll passes 1,000",
+  "Death toll passes 10,000",
+  "International relief mobilizes",
+  "Death toll passes 50,000",
+  "Displacement peaks at 5,552k people",
+  "M6.8 aftershock",
+  "90% of power and water restored"
+ ],
+ "bubbles": 24
+}

@@ -58,7 +58,7 @@ export default function DataDrawer() {
   const flagged = catalog?.filter((e) => e.stale).length ?? 0;
 
   return (
-    <aside className="fade-in absolute bottom-[93px] right-0 top-0 z-20 w-[360px] max-w-full overflow-y-auto border-l border-line bg-bg p-4 text-[12px] md:bottom-[49px]" aria-label="Data and assumptions">
+    <aside className="fade-in absolute bottom-[133px] right-0 top-0 z-20 w-[360px] max-w-full overflow-y-auto border-l border-line bg-bg p-4 text-[12px] md:bottom-[89px]" aria-label="Data and assumptions">
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <h2 className="text-[14px] font-medium leading-tight">Data &amp; assumptions</h2>

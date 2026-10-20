@@ -20,7 +20,14 @@ apps/web/                 Next.js 16 · TypeScript · Tailwind v4 · MapLibre GL
   src/components/         TopBar, MapView, Timeline, ChatPanel, VoicesLog, PersonaDrawer, LayerPills
   data/                   places.json (Natural Earth populated places) + catalog.json (provenance)
   scripts/fetch-places.mjs  seed ETL: download → normalize → data/places.json
-services/sim/             M1+  FastAPI: engine, domain modules, persona cognition, reporter
+services/sim/             M2–M5  FastAPI simulation service (Python 3.13, NumPy, DuckDB, Pydantic, Anthropic SDK)
+  worldsim/world.py       reads the snapshot (countries, indicators, companies, admin-1 areas); nothing is guessed
+  worldsim/personas.py    population-conserving segments from age shares + a GDP/Gini lognormal income model
+  worldsim/modules/       launch, epidemiology, disaster (earthquake), trade, generic — one interface (base.py)
+  worldsim/engine.py      ensemble → median run → frames → sensitivity → counterfactuals → summary
+  worldsim/voices.py      grounded bubble templates + validated LLM batches; llm.py budget, cache, cost
+  worldsim/report.py      the 11-section report (JSON + Markdown); chat.py follow-ups; compare.py; feeds.py
+  worldsim/prompts/       versioned prompt files; tests/ (unit, contract, module, golden runs, backtests)
 data/pipeline/            M1   Python ETL (stdlib + DuckDB): one job per source → validated Parquet snapshot, catalog with provenance
   schema.sql              logical schema = data contract (NOT NULL provenance, ISO3/range CHECKs)
   jobs/                   naturalearth.py, worldbank.py, companies.py (Wikidata, GLEIF, SEC EDGAR)
@@ -28,10 +35,11 @@ data/pipeline/            M1   Python ETL (stdlib + DuckDB): one job per source 
 data/snapshots/<date>/    *.parquet + manifest.json; LATEST names the current snapshot (generated, gitignored)
 data/cache/               last good response per request, the fallback when a source is down (gitignored)
 apps/web/src/lib/data/    store.ts (DuckDB over the latest snapshot), types.ts (read API contracts)
-docs/                     this file, DESIGN.md, DEMO-M0.md
+docs/                     this file, DESIGN.md, DEMO-M0.md … DEMO-M5.md
+docker-compose.yml        pipeline (on demand), sim, web; .github/workflows/ci.yml runs all three test suites
 ```
 
-Contracts are defined once in `apps/web/src/lib/sim/types.ts`. In M1 the Python side mirrors them as Pydantic models and a contract test checks that the generated JSON Schemas match.
+Contracts are defined once in `apps/web/src/lib/sim/types.ts` and mirrored by `services/sim/worldsim/models.py`. `services/sim/tests/test_contract.py` parses the TypeScript interfaces and fails when either side adds a field the other does not declare, or when a required TypeScript field is never sent.
 
 ## 3. Data model
 
@@ -88,7 +96,7 @@ Pipeline per run: `parse → assemble context → select modules → generate pe
 
 ## 5. API contract
 
-Served by Next.js route handlers in M0 (mock engine). From M2 the same paths proxy to FastAPI; the client does not change.
+Next.js route handlers proxy `/api/runs/*`, `/api/health` and `/api/feeds` to the sim service (`SIM_SERVICE_URL`, default `http://127.0.0.1:8731`). When the service is unreachable, run creation, streaming and chat fall back to the M0 mock engine, which labels itself `engine: 'mock-m0'` in the UI. The client does not change.
 
 ```
 POST /api/runs                 {prompt, answers?, assumptions?, seed?, parent_run_id?, branch_at?}
@@ -96,19 +104,28 @@ POST /api/runs                 {prompt, answers?, assumptions?, seed?, parent_ru
 GET  /api/runs/{id}            → RunConfig
 GET  /api/runs/{id}/stream     text/event-stream
        event: personas   data: {personas: Persona[]}           once, before the first frame
-       event: frame      data: Frame                           one per step
-       event: progress   data: {t, total, label}
-       event: summary    data: Summary                         at the end
+       event: meta       data: {meta: RunMeta}                 module, key metric, layers, ensemble size
+       event: progress   data: {t, total, label}               "Running ensemble 8 of 24", "Simulating day 14 of 120"
+       event: frame      data: Frame                           one per step: deltas, bubbles, events, flows, metrics, layers, band
+       event: summary    data: Summary                         medians with 5/25/75/95th percentiles
+       event: report     data: Report                          the 11-section report
        event: done | error
-POST /api/runs/{id}/chat       {message} → {reply, action?}    action: {type:'zoom', center, zoom} | {type:'branch', run_id}
+GET  /api/runs                 → RunListItem[]               run history with parent links (branches)
+POST /api/runs/{id}/chat       {message, t?} → {reply, action?}
+                               action: zoom {center, zoom} | layers {…} | branch {run_id, spec, parent_run_id} | compare {a, b}
+GET  /api/runs/{id}/report     → Report;  GET /api/runs/{id}/report.md → Markdown download
+GET  /api/runs/{a}/compare/{b} → CompareResult              metric deltas with intervals, both bands, country deltas
+GET  /api/feeds                → {feeds: [{id, name, publisher, license, retrieved, status: live|stale|unavailable, items}]}
+GET  /api/data/geo             → country polygons (FeatureCollection keyed by iso3) for the choropleth
 GET  /api/data/catalog         → DataCatalogEntry[]          as_of, retrieved, license, confidence, fetch_status, freshness, stale_reason
 GET  /api/data/countries       → {snapshot_id, countries: CountrySummary[]}
 GET  /api/data/countries/{iso3}[?series=1] → CountryProfile  every value {…, source, as_of, confidence, license, retrieved}; `missing[]`
 GET  /api/data/companies       → {snapshot_id, companies: CompanySummary[]}
 GET  /api/data/companies/{ref} → CompanyProfile              ref = id | QID | LEI | ticker | unique id prefix; `missing[]`
                                data routes: 404 unknown, 400 malformed, 503 before the first snapshot
-GET  /api/runs/{id}/report.md | .pdf        (M4)
 ```
+
+Branches: `POST /api/runs` with `parent_run_id` copies the parent's spec and seed, adds interventions parsed from the prompt (or `interventions`), and fixes edited assumptions (`assumptions: {id: value}`). PDF export is the report page printed by the browser (print stylesheet).
 
 Frames carry deltas only. The `personas` event carries static fields once. A 4k-persona, 180-step run is about 1 MB total.
 
@@ -160,10 +177,10 @@ Acceptance
 ## 9. Milestones 1–5
 
 1. **Done.** Data layer v1: World Bank WDI, UN WPP, Natural Earth admin-0/1, GLEIF + Wikidata + EDGAR for ~500 companies; Postgres/PostGIS + Parquet; catalog with provenance; freshness jobs. See "M1 as built" below and `docs/DEMO-M1.md`.
-2. FastAPI service; LLM scenario parser with JSON-schema outputs; persona generator from real distributions; product-launch module (Bass diffusion × price elasticity × supply); persona cognition with a budget manager; summary report. Walkthrough A end to end.
-3. Epidemiology (age-structured SEIRD + air-travel coupling), disaster, macro/supply-chain modules; networks layer; ensembles (20–100 runs) with 50/90% bands; deck.gl for arcs and particles.
-4. Branching, compare view, real-time feeds (GDELT, markets, USGS, WHO DON), generic fallback module, PDF/Markdown export, shareable links.
-5. Calibration and backtests against analogs, performance tuning, accessibility audit, docs.
+2. **Done.** FastAPI service; LLM scenario parser with JSON-schema outputs; persona generator from real distributions; product-launch module; persona cognition with a budget manager; summary report. See "M2–M5 as built" and `docs/DEMO-M2.md`.
+3. **Done.** Epidemiology, earthquake and trade modules; travel and trade networks; ensembles with 50/90% bands; sensitivity and counterfactuals. `docs/DEMO-M3.md`.
+4. **Done.** Branching, compare view, run history, live feeds (USGS, WHO DON), generic fallback module, Markdown and print-to-PDF export, read-only share links. `docs/DEMO-M4.md`.
+5. **Done.** Backtests (earthquakes), golden-run regression, contract tests, accessibility and performance checks, Docker/CI, docs. `docs/DEMO-M5.md`.
 
 ### M1 as built
 
@@ -195,6 +212,40 @@ Deviations from the plan above, with the reason:
 7. **Pydantic mirror deferred.** The JSON-schema contract test between `types.ts` and Python models moves to M2 with the FastAPI service. The read API contracts live in `apps/web/src/lib/data/types.ts`.
 8. **Snapshots are generated, not committed.** `data/snapshots/` and `data/cache/` are gitignored; data tests (pytest contracts, vitest route/store) skip until a snapshot exists.
 9. **Wikidata query shape.** Six flat SPARQL queries for all companies at once: the query service overflowed on GROUP BY over a large VALUES block, and it rate-limits bursts (down to 1 request/minute during incidents), which the fetcher honors via `Retry-After`.
+
+### M2–M5 as built
+
+**Engine pipeline.** `parse → world snapshot → personas → module priors (+ user edits) → ensemble of N runs (default 24, `WORLDSIM_ENSEMBLE`) → the member closest to the median key outcome is re-run with detail and animated → frames → one-at-a-time sensitivity (top 5) and counterfactuals → summary and report`. Every random draw comes from `numpy.random.default_rng([seed, member, …])`, so `(seed, spec, overrides, snapshot)` replays a run exactly; `tests/test_golden.py` pins five reference runs.
+
+**Personas.** Each country's World Bank population is split between Natural Earth cities (scaled so cities never exceed urban population) and a "rest of country" location, then into five segments: children 0–14, adults 65+ (WDI age shares) and working-age adults by income quantile (bottom 50%, middle 40%, top 10%) of a lognormal fitted to GDP per capita and the Gini index. Totals match WDI exactly (`test_personas.py`). About 7,300 people personas plus 8–12 institutions per run. Traits come from data where it exists (internet use, mobile subscriptions, income); institutional trust is a labeled neutral prior until survey data is ingested.
+
+**Modules.** All share `Module.priors()` (every parameter with a central value, a range, origin and source) and `simulate(ctx, params, rng, detail)`.
+
+| Module | Mechanism | Data it uses | Key outcome |
+|---|---|---|---|
+| launch | Bass diffusion per segment × awareness × availability waves (income group, EU/China review delays) × affordability (income lognormal vs price), supply ramp and backlog, competitor price cut, supplier revenue (BOM shares) | GDP per capita, Gini, internet use, income group, SEC EDGAR revenue for supplier shares | units shipped |
+| epidemiology | stochastic age-structured SEIRD on every location; within-country gravity mixing; international seeding through a gravity travel network; hospital surge capacity from beds per 1,000; behavior drop with visible deaths; interventions; ascertainment and reporting lag | population, age shares, hospital beds, physicians, income group | deaths |
+| disaster | earthquake intensity (simplified isoseismal relation + finite rupture), PAGER-style fatality curve with θ from GDP per capita, displacement, outages, aftershock (Båth's law), relief capacity | population (cities as discs, rural population over admin-1 areas), GDP per capita | deaths |
+| trade | gravity bilateral flows × product share, pass-through, import elasticity, diversion, retaliation, tariff revenue | GDP, distance | lost imports |
+| generic | stock-and-flow impact from the origin with hub spillovers, attention and recovery; parameters from the event class and the analog library; always low confidence | population | people materially affected |
+
+**Persona cognition.** Bubbles are templates filled with the persona's own numbers by default. With `WORLDSIM_LLM=on`, up to 8 routine reactions per step go to Claude Haiku 5.5 and up to 4 institutional voices to Claude Opus 5.5 as JSON-schema calls; a line is accepted only if every number in it appears in its input (`voices.numbers_ok`), otherwise the template is used. `llm.Budget` caps calls per step, per run and in dollars; responses are cached on disk by prompt hash. The parser and the report headline use the same validated path. Prompts live in `worldsim/prompts/` with a version header.
+
+**Uncertainty.** Summary metrics are medians with 5th–95th and 25th–75th percentiles across the ensemble; the timeline draws the band per step. Confidence per output is one rule (`engine.confidence`): low without data, in generic mode, or when more than 12 low-confidence priors drive the run.
+
+**Calibration.** `tests/test_backtests.py` runs six historical earthquakes against the real snapshot: geometric-mean bias about 1.25×, five of six within 4×, Gorkha 2015 overpredicted about 30×. The launch and epidemiology modules are not yet backtested: that needs historical-world snapshots (2007 for the iPhone, 2009 for H1N1), which the pipeline does not build yet.
+
+**Performance** (M-series laptop, Chrome, 2026-10-20): 7,312 persona dots at 16× playback, 103 fps average, p95 frame 17 ms; 15,000 synthetic points with continuous pan and zoom, 104 fps average, p95 9 ms, one 479 ms cluster rebuild. First frame of a launch run about 0.6 s, of an outbreak run about 4 s (24-run ensemble of 365 daily steps).
+
+Deviations from the plan, with the reason:
+
+1. **LLM calls are off by default.** No credentials were available while building, and runs should never spend money silently. The deterministic paths are complete; LLM paths are exercised with a fake client in `tests/test_llm.py`.
+2. **No deck.gl.** MapLibre clustering and line layers meet the 60 fps target at 15,000 points (measured above), so the second rendering stack was not needed.
+3. **No input-output macro model or bilateral customs data.** Trade uses a gravity baseline and product-share priors until UN Comtrade is ingested; supply-chain prompts use the trade module.
+4. **Disaster covers earthquakes.** Floods, cyclones and wildfires run in the generic fallback until their hazard models and exposure data exist.
+5. **Branching re-runs from day 0** with the parent's seed and the new interventions at their day, rather than resuming saved mid-run state; `branch_at` records where the user asked.
+6. **Feeds:** USGS and WHO Disease Outbreak News are wired with cache and stale flags. GDELT and market prices are not: GDELT's API is unstable for unattended use and market data needs a licensed provider.
+7. **Run storage** is JSON configs on disk (`services/sim/runs/`) plus an in-memory cache of recent runs; frames are recomputed from the config on replay.
 
 ## 10. Open decisions
 

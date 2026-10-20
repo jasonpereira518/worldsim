@@ -10,7 +10,13 @@ export const MAP_COLORS: Record<Theme, Palette> = {
 };
 
 export const EMPTY_FC: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
-export interface StyleData { dots: GeoJSON.FeatureCollection; institutions: GeoJSON.FeatureCollection; flows: GeoJSON.FeatureCollection }
+export interface StyleData {
+  dots: GeoJSON.FeatureCollection;
+  institutions: GeoJSON.FeatureCollection;
+  flows: GeoJSON.FeatureCollection;
+  countries?: GeoJSON.FeatureCollection;
+  live?: GeoJSON.FeatureCollection;
+}
 
 const TILES = 'https://tiles.openfreemap.org/planet';
 const GLYPHS = 'https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf';
@@ -34,6 +40,8 @@ const statusStrokeWidth: ExpressionSpecification = ['match', ['get', 'status'], 
 const clusterRatio: ExpressionSpecification = ['/', ['get', 'isum'], ['max', ['get', 'pop'], 1]];
 
 export function buildStyle(theme: Theme, data: StyleData = { dots: EMPTY_FC, institutions: EMPTY_FC, flows: EMPTY_FC }): StyleSpecification {
+  // Choropleth value v in [0, 1] arrives through feature-state (set per frame), so polygons are uploaded once.
+  const choroFill: ExpressionSpecification = ['interpolate', ['linear'], ['coalesce', ['feature-state', 'v'], 0], 0, theme === 'light' ? '#F2F2F2' : '#141414', 1, theme === 'light' ? '#3A3A3A' : '#D0D0D0'];
   const c = MAP_COLORS[theme];
   const ramp: ExpressionSpecification = ['interpolate', ['linear'], clusterRatio, 0, c.bg, 0.3, c.gray2, 0.6, c.muted, 1, c.ink];
   return {
@@ -47,10 +55,16 @@ export function buildStyle(theme: Theme, data: StyleData = { dots: EMPTY_FC, ins
       },
       institutions: { type: 'geojson', data: data.institutions },
       flows: { type: 'geojson', data: data.flows },
+      countries: { type: 'geojson', data: data.countries ?? EMPTY_FC, promoteId: 'iso3' },
+      live: { type: 'geojson', data: data.live ?? EMPTY_FC },
     },
     layers: [
       { id: 'land', type: 'background', paint: { 'background-color': c.land } },
       { id: 'water', type: 'fill', source: 'omt', 'source-layer': 'water', filter: ['!=', ['get', 'brunnel'], 'tunnel'], paint: { 'fill-color': c.water } },
+      { id: 'choropleth', type: 'fill', source: 'countries',
+        paint: { 'fill-color': choroFill, 'fill-opacity': ['case', ['==', ['feature-state', 'v'], null], 0, 0.6] } },
+      { id: 'choropleth-outline', type: 'line', source: 'countries',
+        paint: { 'line-color': c.muted, 'line-width': ['case', ['boolean', ['feature-state', 'hover'], false], 1.2, 0], 'line-opacity': 0.8 } },
       { id: 'waterway', type: 'line', source: 'omt', 'source-layer': 'waterway', minzoom: 8, paint: { 'line-color': c.waterway, 'line-width': ['interpolate', ['linear'], ['zoom'], 8, 0.5, 14, 1.5] } },
       { id: 'building', type: 'fill', source: 'omt', 'source-layer': 'building', minzoom: 13, paint: { 'fill-color': c.building, 'fill-outline-color': c.road } },
       { id: 'roads-minor', type: 'line', source: 'omt', 'source-layer': 'transportation', minzoom: 11,
@@ -81,6 +95,10 @@ export function buildStyle(theme: Theme, data: StyleData = { dots: EMPTY_FC, ins
           'text-size': ['interpolate', ['linear'], ['zoom'], 3, ['case', ['==', ['get', 'capital'], 2], 11, 9], 10, 14], 'text-anchor': 'top', 'text-offset': [0, 0.4] },
         paint: { 'text-color': c.label, 'text-halo-color': c.halo, 'text-halo-width': 1 } },
       // --- Worldsim data layers ---
+      { id: 'live-quakes', type: 'circle', source: 'live',
+        paint: { 'circle-color': c.ink, 'circle-opacity': 0, 'circle-stroke-color': c.ink, 'circle-stroke-width': 1.5, 'circle-stroke-opacity': 0.9,
+          'circle-radius': ['interpolate', ['linear'], ['coalesce', ['get', 'magnitude'], 4.5], 4.5, 5, 6, 9, 7.5, 16] } },
+      { id: 'live-quakes-dot', type: 'circle', source: 'live', paint: { 'circle-color': c.ink, 'circle-radius': 1.5 } },
       { id: 'flows', type: 'line', source: 'flows', layout: { 'line-cap': 'round' },
         paint: { 'line-color': c.ink, 'line-opacity': 0.55, 'line-width': ['interpolate', ['linear'], ['get', 'weight'], 0, 0.5, 1, 2], 'line-dasharray': [0, 4, 3] } },
       { id: 'dots-cluster', type: 'circle', source: 'dots', filter: ['has', 'point_count'],

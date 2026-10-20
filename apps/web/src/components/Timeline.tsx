@@ -1,8 +1,10 @@
 'use client';
 import { useStore, type Speed } from '@/lib/store';
+import BandChart from './BandChart';
 
 export default function Timeline() {
   const spec = useStore((s) => s.spec);
+  const meta = useStore((s) => s.meta);
   const frames = useStore((s) => s.frames);
   const events = useStore((s) => s.events);
   const playhead = useStore((s) => s.playhead);
@@ -16,6 +18,11 @@ export default function Timeline() {
 
   return (
     <div className="absolute inset-x-0 bottom-11 z-10 border-t border-line bg-bg/95 px-3 py-2 backdrop-blur md:bottom-0">
+      {frames.some((f) => f.band) && (
+        <div className="mb-1" title={`Ensemble of ${meta?.ensemble_size ?? ''} runs: 90% band (light), 50% band (dark), median (line). The map shows the median run.`}>
+          <BandChart bands={frames.map((f) => f.band)} total={total} playhead={playhead} unit={meta?.key_unit} />
+        </div>
+      )}
       <div className="flex items-center gap-2">
         <button className={icon} aria-label={playing ? 'Pause' : 'Play'} onClick={() => setPlaying(!playing)} disabled={!frames.length}>
           {playing ? <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden><rect x="1" y="1" width="3" height="8" fill="currentColor" /><rect x="6" y="1" width="3" height="8" fill="currentColor" /></svg>

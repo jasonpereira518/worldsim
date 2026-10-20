@@ -43,7 +43,8 @@ body {
 }
 .num { font-family: var(--font-mono), ui-monospace, monospace; font-variant-numeric: tabular-nums; }
 :focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
-button, input, select { font: inherit; color: inherit; }
+/* Buttons and inputs inherit font and color from Tailwind's preflight (base layer). Do not restate that rule here:
+   unlayered CSS beats every layer, so it would override utilities such as text-bg on active pills. */
 ::selection { background: var(--ink); color: var(--bg); }
 
 /* Scrubber */
@@ -82,4 +83,13 @@ input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border-radius
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
+/* Report print styles: black on white, no chrome */
+@media print {
+  @page { margin: 16mm; }
+  html, body { height: auto; overflow: visible; background: #fff; color: #000; }
+  .report { height: auto !important; overflow: visible !important; }
+  .report h2 { break-after: avoid; }
+  .report blockquote, .report table, .report svg { break-inside: avoid; }
 }

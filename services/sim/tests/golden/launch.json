@@ -1,0 +1,73 @@
+{
+ "module": "launch",
+ "ensemble": 8,
+ "median_member": 0,
+ "metrics": {
+  "Units shipped": [
+   0.6771,
+   0.8556,
+   0.9042,
+   1.0329,
+   1.0754
+  ],
+  "Revenue": [
+   0.3379,
+   0.427,
+   0.4512,
+   0.5154,
+   0.5366
+  ],
+  "Adopters per 1,000 people (world)": [
+   0.1933,
+   0.2443,
+   0.2582,
+   0.2949,
+   0.3071
+  ],
+  "Countries on sale": [
+   217.0,
+   217.0,
+   217.0,
+   217.0,
+   217.0
+  ],
+  "Peak backlog": [
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0
+  ],
+  "Assembler revenue from the device": [
+   0.012,
+   0.0151,
+   0.0181,
+   0.0207,
+   0.0234
+  ],
+  "Foundry revenue from the device": [
+   0.0284,
+   0.0451,
+   0.0457,
+   0.0493,
+   0.0579
+  ],
+  "Addressable buyers": [
+   104.1854,
+   113.2516,
+   126.7883,
+   137.6276,
+   153.9844
+  ]
+ },
+ "events": [
+  "Pre-orders open",
+  "Launch: on sale in 3 countries",
+  "On sale in Germany, France, Belgium",
+  "On sale in Turkey, Thailand",
+  "On sale in China",
+  "On sale in Nigeria, India, Vietnam, Brazil, Russia, Mexico and 139 more",
+  "On sale in Italy, Spain, Greece, Poland, Portugal, Romania and 18 more"
+ ],
+ "bubbles": 161
+}

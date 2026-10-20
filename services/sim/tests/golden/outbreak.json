@@ -1,0 +1,65 @@
+{
+ "module": "epidemiology",
+ "ensemble": 8,
+ "median_member": 3,
+ "metrics": {
+  "Deaths": [
+   121.65,
+   373.75,
+   1216.5,
+   21915.75,
+   37697.85
+  ],
+  "Infections (true)": [
+   124530.65,
+   235239.75,
+   690293.0,
+   8003426.25,
+   20365820.55
+  ],
+  "Reported cases": [
+   9952.0265,
+   26627.2838,
+   63562.6079,
+   450772.0898,
+   1105390.6864
+  ],
+  "Countries with community transmission": [
+   2.35,
+   3.75,
+   4.5,
+   22.0,
+   30.2
+  ],
+  "Countries with hospitals over surge capacity": [
+   0.0,
+   0.0,
+   0.0,
+   1.0,
+   1.0
+  ],
+  "Days until 10 countries have transmission": [
+   71.1,
+   71.5,
+   72.0,
+   74.0,
+   75.6
+  ],
+  "Global peak of active infections": [
+   90.0,
+   90.0,
+   90.0,
+   90.0,
+   90.0
+  ]
+ },
+ "events": [
+  "Community transmission in Vietnam",
+  "Human-to-human cluster confirmed in Vietnam",
+  "Community transmission in China",
+  "Community transmission in Thailand",
+  "Community transmission in India",
+  "Community transmission in United States of America"
+ ],
+ "bubbles": 102
+}

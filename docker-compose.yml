@@ -1,0 +1,34 @@
+# Local stack: data pipeline (on demand), simulation service, web app.
+#   docker compose run --rm pipeline        # build data/snapshots (needs internet the first time)
+#   docker compose up --build sim web       # http://localhost:3000
+services:
+  pipeline:
+    profiles: [pipeline]
+    image: python:3.13-slim
+    working_dir: /data
+    volumes: ["./data:/data"]
+    command: sh -c "pip install -q -r requirements.txt && python -m pipeline run"
+
+  sim:
+    build: ./services/sim
+    ports: ["8731:8731"]
+    volumes:
+      - ./data/snapshots:/data/snapshots:ro
+      - ./apps/web/data/places.json:/data/places.json:ro
+      - sim-state:/state
+    environment:
+      # set WORLDSIM_LLM=on and provide ANTHROPIC_API_KEY (via an env file or secret) to enable LLM parsing and voices
+      WORLDSIM_LLM: "${WORLDSIM_LLM:-off}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+
+  web:
+    build: ./apps/web
+    ports: ["3000:3000"]
+    depends_on: [sim]
+    volumes: ["./data/snapshots:/data/snapshots:ro"]
+    environment:
+      SIM_SERVICE_URL: http://sim:8731
+      WORLDSIM_SNAPSHOTS: /data/snapshots
+
+volumes:
+  sim-state: {}

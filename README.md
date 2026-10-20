@@ -1,46 +1,77 @@
 # Worldsim
 
-A prompt-driven world event simulator. Type an event, watch it unfold on a monochrome world map with personas who speak, and get a written summary when the run finishes.
+A prompt-driven world event simulator. Type an event, watch it unfold on a monochrome world map with personas who speak, and get a written report with ranges when the run finishes.
 
 Everything on screen is a **simulation**, not a forecast or advice. Simulated today is **2026-10-20**.
 
-**Status: Milestone 1.** A deterministic **mock engine** streams over the real API contract (M0), and a real data layer (M1) serves countries and ~500 companies from World Bank, Natural Earth, Wikidata, GLEIF and SEC EDGAR, every value with provenance. The engine starts reading that data in Milestone 2. See `docs/ARCHITECTURE.md`.
+**Status: Milestones 0–5 built.** A Python simulation service runs domain modules (product launch, epidemiology, earthquake, trade, and a generic fallback) as 24-run ensembles over a real data snapshot (World Bank, Natural Earth, Wikidata, GLEIF, SEC EDGAR). The Next.js app streams the median run, shows the uncertainty band, and produces an 11-section report. See `docs/ARCHITECTURE.md` for the design, what was built, and the deviations from the brief.
 
 ## Run
 
 ```bash
 cd data && uv venv --python 3.13 .venv && uv pip install --python .venv/bin/python -r requirements.txt
-cd data && .venv/bin/python -m pipeline run      # build data/snapshots/<today>/ from live sources (cache fallback)
-cd apps/web && npm install && npm run dev
 ```
 
-Open http://localhost:3000. Needs internet for basemap tiles (OpenFreeMap). **Data** in the top bar (or `/sources`) shows every dataset with its freshness.
+```bash
+cd data && .venv/bin/python -m pipeline run
+```
 
 ```bash
-cd data && .venv/bin/python -m pytest pipeline/tests -q   # loader + per-source data-contract tests
-cd data && .venv/bin/python -m pipeline status           # freshness of the latest snapshot (exit 1 if stale)
-cd apps/web && npm test          # unit tests (vitest)
-cd apps/web && npm run build     # production build, includes typecheck + lint
-node apps/web/scripts/fetch-places.mjs   # regenerate data/places.json from Natural Earth
+cd services/sim && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+```
+
+```bash
+cd apps/web && npm install && npm run sim
+```
+
+```bash
+cd apps/web && npm run dev
+```
+
+Open http://localhost:3000. Basemap tiles (OpenFreeMap) and live feeds need internet. Without the sim service, the web app falls back to the Milestone 0 mock engine and labels it "Mock engine".
+
+LLM parsing and persona voices are off by default. To enable them, start the service with `WORLDSIM_LLM=on` and Anthropic credentials (`docs/DEMO-M2.md`, step 4). Runs then spend API credit within per-run caps.
+
+Docker alternative:
+
+```bash
+docker compose run --rm pipeline
+```
+
+```bash
+docker compose up --build sim web
+```
+
+## Tests
+
+```bash
+cd data && .venv/bin/python -m pytest pipeline/tests -q
+```
+
+```bash
+cd services/sim && .venv/bin/python -m pytest -q
+```
+
+```bash
+cd apps/web && npm run lint && npm test && npm run build
 ```
 
 ## Layout
 
 ```
-apps/web        Next.js 16 · TypeScript · Tailwind v4 · MapLibre GL · DuckDB (read API over the data snapshot)
-data/pipeline   Python 3.13 ETL: one job per source → schema-validated Parquet snapshot in data/snapshots/
-docs/           ARCHITECTURE.md (data model, module interfaces, API contract, milestones)
-                DESIGN.md (tokens, map palette, status encoding, accessibility)
-                DEMO-M0.md, DEMO-M1.md (demo scripts)
+apps/web        Next.js 16 · TypeScript · Tailwind v4 · MapLibre GL · DuckDB read API; proxies /api/runs/* to the sim service
+services/sim    Python 3.13 FastAPI: personas, modules, ensembles, voices, reports, chat, compare, live feeds
+data/pipeline   Python ETL: one job per source → schema-validated Parquet snapshot in data/snapshots/
+docs/           ARCHITECTURE.md, DESIGN.md, DEMO-M0.md … DEMO-M5.md
 ```
 
 ## Milestones
 
-| # | Scope | Status |
-|---|---|---|
-| 0 | Scaffold, design system, basemap, layout, mock data end to end | done |
-| 1 | Data layer v1: countries + ~500 companies with provenance | done |
-| 2 | FastAPI sim service, LLM parser, product-launch module, personas, summary report | |
-| 3 | Epidemiology, disaster, macro/supply-chain modules, networks, ensembles | |
-| 4 | Branching, compare view, real-time feeds, generic fallback, export, sharing | |
-| 5 | Calibration, backtests, performance, accessibility, docs | |
+| # | Scope | Status | Demo |
+|---|---|---|---|
+| 0 | Scaffold, design system, basemap, layout, mock data end to end | done | `docs/DEMO-M0.md` |
+| 1 | Data layer v1: countries + ~500 companies with provenance | done | `docs/DEMO-M1.md` |
+| 2 | Sim service, parser, personas from real distributions, launch module, voices, report | done | `docs/DEMO-M2.md` |
+| 3 | Epidemiology, earthquake, trade modules; networks; ensembles, sensitivity, counterfactuals | done | `docs/DEMO-M3.md` |
+| 4 | Branching, compare, run history, live feeds, generic fallback, export, sharing | done | `docs/DEMO-M4.md` |
+| 5 | Backtests, golden runs, contract tests, performance, accessibility, Docker, CI | done | `docs/DEMO-M5.md` |

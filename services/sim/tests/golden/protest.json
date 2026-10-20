@@ -1,0 +1,43 @@
+{
+ "module": "generic",
+ "ensemble": 8,
+ "median_member": 1,
+ "metrics": {
+  "People materially affected": [
+   3929738.199,
+   5049390.8304,
+   5883688.715,
+   20053291.112,
+   32001748.4522
+  ],
+  "Countries with material impact": [
+   3.35,
+   4.0,
+   4.0,
+   8.0,
+   8.0
+  ],
+  "Day of peak impact": [
+   14.0,
+   14.0,
+   14.0,
+   16.25,
+   17.0
+  ],
+  "People aware of the event": [
+   3374373746.3427,
+   3374373746.3427,
+   3374373746.3427,
+   3374373746.3427,
+   3374373746.3427
+  ]
+ },
+ "events": [
+  "Event begins (generic fallback model)",
+  "Material impact reaches Nigeria",
+  "Material impact reaches Benin",
+  "Material impact reaches Togo",
+  "Impact peaks"
+ ],
+ "bubbles": 80
+}

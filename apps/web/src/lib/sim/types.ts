@@ -67,9 +67,23 @@ export interface Provenance {
 export interface Assumption {
   id: string;
   text: string;
-  value?: number | string;
+  value?: number | string | null;
+  unit?: string | null;
   origin: Origin;
   confidence: Confidence;
+  source?: string | null;
+  /** numeric assumptions the user may edit; low/high bound the ensemble draws */
+  editable?: boolean;
+  low?: number | null;
+  high?: number | null;
+}
+
+export interface Intervention {
+  kind: 'border_closure' | 'lockdown' | 'vaccine' | 'price_change' | 'tariff_change' | 'aid' | 'custom';
+  day: number;
+  value?: number | null;
+  countries: string[];
+  text: string;
 }
 
 export interface Place {
@@ -101,8 +115,12 @@ export interface ScenarioSpec {
   actors: string[];
   mechanisms: string[];
   assumptions: Assumption[];
-  clarifying_question?: string;
+  interventions?: Intervention[];
+  clarifying_question?: string | null;
   engine: 'mock-m0' | 'worldsim';
+  /** domain module that ran: launch | epidemiology | disaster | trade | generic (mock in M0) */
+  module?: string;
+  parser?: 'rules' | 'llm';
   confidence: Confidence;
 }
 
@@ -129,6 +147,7 @@ export interface Persona {
   };
   context: { country_profile_ref: string; relevant_companies: string[]; local_conditions: string[] };
   voice: string;
+  segment?: string;
 }
 
 export interface Delta {
@@ -144,7 +163,10 @@ export interface Bubble {
   text: string;
   sentiment: -1 | 0 | 1;
   priority: number;
-  why: { event: string; metric: string; before: number; after: number; unit: string };
+  why: { event: string; metric: string; before: number; after: number; unit: string; source?: string | null };
+  decision?: string | null;
+  emotion?: string | null;
+  generator?: 'template' | 'llm';
 }
 
 export interface SimEvent {
@@ -172,6 +194,10 @@ export interface Frame {
   events: SimEvent[];
   flows: Flow[];
   metrics: Record<string, number>;
+  /** per-country values of the choropleth layers at this step, e.g. { cases_per_100k: { VNM: 12.3 } } */
+  layers?: Record<string, Record<string, number>>;
+  /** ensemble band of the key metric at this step: [p5, p25, p50, p75, p95] */
+  band?: number[] | null;
 }
 
 export interface RunConfig {
@@ -180,17 +206,24 @@ export interface RunConfig {
   spec: ScenarioSpec;
   created_at: string;
   data_snapshot: string;
-  parent_run_id?: string;
-  branch_at?: number;
+  parent_run_id?: string | null;
+  branch_at?: number | null;
+  /** sim service only (the M0 mock omits them) */
+  engine_version?: string;
+  ensemble_size?: number;
+  label?: string | null;
 }
 
 export interface SummaryMetric {
   name: string;
   value: number;
   unit: string;
-  low?: number;
-  high?: number;
+  low?: number | null;
+  high?: number | null;
+  low50?: number | null;
+  high50?: number | null;
   confidence: Confidence;
+  source?: string | null;
 }
 
 export interface Summary {
@@ -203,7 +236,9 @@ export type ServerEvent =
   | { type: 'personas'; personas: Persona[] }
   | { type: 'frame'; frame: Frame }
   | { type: 'progress'; t: number; total: number; label: string }
+  | { type: 'meta'; meta: RunMeta }
   | { type: 'summary'; summary: Summary }
+  | { type: 'report'; report: Report }
   | { type: 'done' }
   | { type: 'error'; message: string };
 
@@ -228,8 +263,75 @@ export interface DataCatalogEntry extends Omit<Provenance, 'as_of'> {
   stale_reason: string | null;
 }
 
-export interface ChatAction {
-  type: 'zoom';
-  center: [number, number];
-  zoom: number;
+export type ChatAction =
+  | { type: 'zoom'; center: [number, number]; zoom: number }
+  | { type: 'layers'; layers: { dots: boolean; institutions: boolean; flows: boolean; bubbles: boolean } }
+  | { type: 'branch'; run_id: string; spec: ScenarioSpec; parent_run_id: string }
+  | { type: 'compare'; a: string; b: string };
+
+export interface LayerMeta { key: string; label: string; unit: string }
+
+/** Module description sent before the first frame. */
+export interface RunMeta {
+  run_id: string;
+  module: string;
+  key_metric: string;
+  key_unit: string;
+  persona_metric: { name: string; unit: string };
+  layers: LayerMeta[];
+  ensemble_size: number;
+  parent_run_id?: string | null;
+  label?: string | null;
+  engine: string;
+}
+
+export interface RunListItem {
+  run_id: string;
+  title: string;
+  created_at: string;
+  parent_run_id: string | null;
+  label: string | null;
+  module: string;
+  seed: number;
+}
+
+export interface CausalGraph { nodes: { id: string; label: string }[]; edges: { from: string; to: string; label?: string }[] }
+
+/** Full report, spec section 8. */
+export interface Report {
+  run_id: string;
+  title: string;
+  prompt: string;
+  event_type: EventType;
+  module: string;
+  generated_at: string;
+  start_date: string;
+  end_date: string;
+  disclaimer: string;
+  headline: string;
+  headline_generator: 'template' | 'llm';
+  key_outcomes: SummaryMetric[];
+  timeline: { date: string; day: number; title: string; cause: string; places: string[] }[];
+  geography: {
+    tables: Record<string, Record<string, string | number | null>[]>;
+    top_by_layer: { iso3: string; country: string; value: number }[];
+    layer: LayerMeta | null;
+    final_layers: Record<string, Record<string, number>>;
+  };
+  winners_losers: { winners: { name: string; why: string; detail?: string | null }[]; losers: { name: string; why: string; detail?: string | null }[] };
+  voices: { quote: string; persona: string; kind: string; date: string; data: string; generator: string }[];
+  causal: CausalGraph;
+  sensitivities: { key: string; text: string; unit: string; low: number; high: number; central: number; outcome_low: number; outcome_high: number; outcome_central: number; swing: number; origin: string; source?: string | null }[];
+  decision_points: { action: string; trigger: string; effect: string; basis: string }[];
+  confidence: { overall: Confidence; reasons: string[]; data_gaps: string[]; stale_sources: string[]; calibration: string; analogs?: { name: string; outcomes: string; source: string }[]; llm_usage: Record<string, number> };
+  appendix: { datasets: { id: string; name: string; source: string; as_of: string | null; license: string; confidence: string }[]; assumptions: Assumption[]; run: Record<string, unknown> };
+  series: { key: string; unit: string; dates: string[]; band: (number[] | null)[] };
+}
+
+export interface CompareResult {
+  a: { run_id: string; title: string; label: string | null; interventions: Intervention[] };
+  b: { run_id: string; title: string; label: string | null; interventions: Intervention[] };
+  metrics: { name: string; unit: string; a: number; a_low: number | null; a_high: number | null; b: number; b_low: number | null; b_high: number | null; delta: number; delta_pct: number | null }[];
+  series: { unit: string; dates: string[]; a: (number[] | null)[]; b: (number[] | null)[] };
+  layer: { key: string | null; label: string; deltas: { iso3: string; country: string; delta: number }[] };
 }

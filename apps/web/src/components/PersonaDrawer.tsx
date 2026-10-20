@@ -31,7 +31,7 @@ export default function PersonaDrawer() {
   const current = history[Math.min(playhead, history.length - 1)] ?? 'unaware';
 
   return (
-    <aside className="fade-in absolute bottom-[93px] right-0 top-0 z-20 w-[320px] max-w-full md:bottom-[49px] overflow-y-auto border-l border-line bg-bg p-4 text-[12px]" aria-label="Persona details">
+    <aside className="fade-in absolute bottom-[133px] right-0 top-0 z-20 w-[320px] max-w-full md:bottom-[89px] overflow-y-auto border-l border-line bg-bg p-4 text-[12px]" aria-label="Persona details">
       <div className="flex items-start gap-2">
         <span aria-hidden className={`mt-1 inline-block h-3 w-3 shrink-0 bg-ink ${p.kind === 'people' ? 'rounded-full' : ''}`} />
         <div className="min-w-0 flex-1">

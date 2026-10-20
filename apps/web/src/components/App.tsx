@@ -8,6 +8,8 @@ import LayerPills from './LayerPills';
 import ChatPanel from './ChatPanel';
 import PersonaDrawer from './PersonaDrawer';
 import DataDrawer from './DataDrawer';
+import CompareView from './CompareView';
+import { loadLive, loadRun, refreshHistory } from '@/lib/runClient';
 
 /** Client-side playback clock: 1× = 2 simulation steps per second. */
 function usePlayback() {
@@ -36,7 +38,7 @@ function useKeyboard() {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
       const s = useStore.getState();
-      if (e.key === 'Escape') { s.selectPersona(null); s.setDataDrawerOpen(false); return; } // closes drawers from anywhere
+      if (e.key === 'Escape') { s.selectPersona(null); s.setDataDrawerOpen(false); s.setCompare(null); return; } // closes drawers and the comparison from anywhere
       if (/^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(t.tagName) || t.isContentEditable || t.classList?.contains('maplibregl-canvas')) return;
       if (e.code === 'Space') { e.preventDefault(); s.setPlaying(!s.playing); }
       else if (e.key === 'ArrowRight') s.step(1);
@@ -47,9 +49,19 @@ function useKeyboard() {
   }, []);
 }
 
-export default function App() {
+export default function App({ initialRunId, readOnly = false }: { initialRunId?: string; readOnly?: boolean }) {
   usePlayback();
   useKeyboard();
+  useEffect(() => {
+    useStore.getState().setReadOnly(readOnly);
+    const run = initialRunId ?? new URLSearchParams(location.search).get('run');
+    // StrictMode mounts twice in development: load a shared or saved run only once
+    if (run && !useStore.getState().runId) void loadRun(run);
+    void refreshHistory();
+    void loadLive();
+    const id = setInterval(loadLive, 10 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [initialRunId, readOnly]);
   const sheetOpen = useStore((s) => s.sheetOpen);
   const setSheetOpen = useStore((s) => s.setSheetOpen);
   useEffect(() => { useStore.setState({ theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light' }); }, []);
@@ -63,6 +75,7 @@ export default function App() {
           <LayerPills />
           <PersonaDrawer />
           <DataDrawer />
+          <CompareView />
           <Timeline />
         </section>
         <aside aria-label="Chat" className={`absolute inset-x-0 bottom-0 z-30 flex flex-col border-t border-line bg-bg transition-[height] duration-200 md:static md:h-auto md:w-[30%] md:min-w-[320px] md:max-w-[460px] md:border-l md:border-t-0 ${sheetOpen ? 'h-[55%]' : 'h-11'}`}>

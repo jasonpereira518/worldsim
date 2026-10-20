@@ -1,0 +1,71 @@
+{
+ "module": "trade",
+ "ensemble": 8,
+ "median_member": 0,
+ "metrics": {
+  "Lost imports of the product from the target": [
+   6.2698,
+   6.5768,
+   7.5025,
+   9.0578,
+   11.4114
+  ],
+  "Consumer price change of the product in the importer": [
+   19.8892,
+   22.3623,
+   23.7695,
+   24.3508,
+   25.9935
+  ],
+  "Exporter revenue loss": [
+   6.2698,
+   6.5768,
+   7.5025,
+   9.0578,
+   11.4114
+  ],
+  "Demand diverted to other suppliers": [
+   3.0897,
+   3.5021,
+   3.6981,
+   4.8871,
+   5.9693
+  ],
+  "Tariff revenue collected": [
+   1.8388,
+   1.9948,
+   2.2541,
+   2.7432,
+   4.7771
+  ],
+  "Share of runs with retaliation": [
+   0.0,
+   0.0,
+   0.5,
+   1.0,
+   1.0
+  ],
+  "Exporter GDP impact": [
+   -0.094,
+   -0.0666,
+   -0.0491,
+   -0.0466,
+   -0.0409
+  ],
+  "Importer GDP impact": [
+   -0.0503,
+   -0.0356,
+   -0.0172,
+   -0.004,
+   -0.0029
+  ]
+ },
+ "events": [
+  "40% tariff on electric vehicles from China takes effect",
+  "Import response reaches half of its long-run size",
+  "China retaliates",
+  "Lost imports pass $1B",
+  "Import response reaches 90% of its long-run size"
+ ],
+ "bubbles": 69
+}

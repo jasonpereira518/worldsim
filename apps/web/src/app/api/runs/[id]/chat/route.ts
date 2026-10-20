@@ -2,15 +2,17 @@ import { createRun } from '@/lib/sim/engine';
 import { findPlace } from '@/lib/sim/parse';
 import { runs } from '@/lib/sim/registry';
 import type { ChatAction, SimEvent } from '@/lib/sim/types';
+import { proxy, unavailable } from '@/lib/simProxy';
 
-const M4 = 'Branching, comparison and re-runs arrive in Milestone 4. In this build you can ask "zoom into Brazil", "why did Turkey get hit", or use /assumptions, /sources and /reset.';
+const M4 = 'The mock engine supports zoom and explain only; start the sim service (npm run sim) for branching and comparison. You can ask "zoom into Brazil", "why did Turkey get hit", or use /assumptions, /sources and /reset.';
 
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
   const config = runs.get(id);
-  if (!config) return Response.json({ error: 'unknown run' }, { status: 404 });
+  const text = await req.text();
+  if (!config) return (await proxy(`/runs/${encodeURIComponent(id)}/chat`, { method: 'POST', body: text })) ?? unavailable();
   let body: { message?: unknown };
-  try { body = await req.json(); } catch { return Response.json({ error: 'invalid JSON' }, { status: 400 }); }
+  try { body = JSON.parse(text); } catch { return Response.json({ error: 'invalid JSON' }, { status: 400 }); }
   const message = typeof body.message === 'string' ? body.message.trim().slice(0, 500) : '';
   if (!message) return Response.json({ error: 'empty message' }, { status: 400 });
 
