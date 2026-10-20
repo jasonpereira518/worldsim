@@ -1,0 +1,85 @@
+@import "tailwindcss";
+@import "maplibre-gl/dist/maplibre-gl.css";
+
+:root {
+  --bg: #ffffff;
+  --surface: #f7f7f7;
+  --ink: #0a0a0a;
+  --muted: #6b6b6b;
+  --line: #e5e5e5;
+  --gray-2: #bfbfbf;
+  color-scheme: light;
+}
+:root[data-theme="dark"] {
+  --bg: #000000;
+  --surface: #0a0a0a;
+  --ink: #ffffff;
+  --muted: #8f8f8f;
+  --line: #1f1f1f;
+  --gray-2: #4a4a4a;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-gray-2: var(--gray-2);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+html, body { height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans), system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+.num { font-family: var(--font-mono), ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+button, input, select { font: inherit; color: inherit; }
+::selection { background: var(--ink); color: var(--bg); }
+
+/* Scrubber */
+input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; height: 20px; background: transparent; cursor: pointer; }
+input[type="range"]::-webkit-slider-runnable-track { height: 2px; background: var(--line); }
+input[type="range"]::-moz-range-track { height: 2px; background: var(--line); }
+input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; margin-top: -5px; border-radius: 999px; background: var(--ink); border: 2px solid var(--bg); box-shadow: 0 0 0 1px var(--ink); }
+input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 999px; background: var(--ink); border: 2px solid var(--bg); box-shadow: 0 0 0 1px var(--ink); }
+
+/* Speech bubbles */
+.bubble { position: absolute; width: 200px; background: var(--bg); color: var(--ink); border: 1px solid var(--ink); border-radius: 12px; padding: 8px 10px; font-size: 12px; line-height: 1.35; pointer-events: auto; transition: opacity 200ms ease-out, transform 200ms ease-out; }
+.bubble::after { content: ""; position: absolute; width: 10px; height: 10px; background: var(--bg); border-right: 1px solid var(--ink); border-bottom: 1px solid var(--ink); transform: rotate(45deg); }
+.bubble[data-side="tr"]::after { left: 10px; bottom: -6px; }
+.bubble[data-side="tl"]::after { right: 10px; bottom: -6px; }
+.bubble[data-side="br"]::after { left: 10px; top: -6px; transform: rotate(225deg); }
+.bubble[data-side="bl"]::after { right: 10px; top: -6px; transform: rotate(225deg); }
+.bubble[data-side="t"]::after { left: calc(50% - 5px); bottom: -6px; }
+.bubble[data-side="b"]::after { left: calc(50% - 5px); top: -6px; transform: rotate(225deg); }
+.bubble[data-side="r"]::after { left: -6px; top: calc(50% - 5px); transform: rotate(135deg); }
+.bubble[data-side="l"]::after { right: -6px; top: calc(50% - 5px); transform: rotate(-45deg); }
+.bubble .why { display: none; position: absolute; left: 0; top: calc(100% + 8px); width: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font-size: 11px; color: var(--muted); z-index: 2; }
+.bubble:hover .why, .bubble:focus-within .why { display: block; }
+
+/* MapLibre chrome, monochrome */
+.maplibregl-ctrl-attrib { background: var(--bg) !important; color: var(--muted); font-size: 10px; }
+.maplibregl-ctrl-attrib a { color: var(--muted) !important; }
+.maplibregl-ctrl-group { background: var(--bg) !important; border: 1px solid var(--line) !important; box-shadow: none !important; border-radius: 8px !important; }
+.maplibregl-ctrl-group button + button { border-top: 1px solid var(--line) !important; }
+.maplibregl-ctrl button .maplibregl-ctrl-icon { filter: var(--ctrl-filter, none); }
+:root[data-theme="dark"] .maplibregl-ctrl button .maplibregl-ctrl-icon { filter: invert(1); }
+.maplibregl-canvas:focus { outline: none; }
+.maplibregl-canvas:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
+
+@keyframes fade-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.fade-in { animation: fade-in 200ms ease-out; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}

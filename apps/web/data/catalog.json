@@ -1,0 +1,27 @@
+[
+  {
+    "id": "ne_populated_places_50m",
+    "name": "Natural Earth populated places, 1:50m (simple attributes)",
+    "source": "Natural Earth v5.1.1",
+    "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_populated_places_simple.geojson",
+    "as_of": "2022-05-13",
+    "retrieved": "2026-10-20",
+    "license": "Public domain",
+    "confidence": "medium",
+    "fields": [
+      "id (ne_id)",
+      "name",
+      "country",
+      "iso3",
+      "iso2",
+      "admin1",
+      "lat",
+      "lon",
+      "pop (pop_max)",
+      "capital",
+      "hub"
+    ],
+    "used_for": "Milestone 0 mock persona locations and population weights",
+    "note": "pop_max is a metro-area estimate (circa 2015). Replaced by WorldPop / UN WUP in Milestone 1."
+  }
+]
