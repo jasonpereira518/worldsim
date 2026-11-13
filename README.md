@@ -30,7 +30,7 @@ cd apps/web && npm run dev
 
 Open http://localhost:3000. Basemap tiles (OpenFreeMap) and live feeds need internet. Without the sim service, the web app falls back to the Milestone 0 mock engine and labels it "Mock engine".
 
-LLM parsing and persona voices are off by default. To enable them, start the service with `WORLDSIM_LLM=on` and Anthropic credentials (`docs/DEMO-M2.md`, step 4). Runs then spend API credit within per-run caps.
+LLM parsing, persona voices and the agents layer are off by default. To enable them, start the service with `WORLDSIM_LLM=on` and Anthropic credentials (`docs/DEMO-M2.md`, step 4). Runs then spend API credit within a per-run cap of $1.00. With agents on, Claude roles calibrate parameters, choose actor policies and crowd stances, forecast the event's scale, and review the report; the engine still computes every number (`docs/DEMO-M6.md`). The Scale card (reach, magnitude against past events, escalation paths) works with the LLM off.
 
 Docker alternative:
 

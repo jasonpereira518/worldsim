@@ -78,3 +78,7 @@ def test_user_override_fixes_prior():
 def test_numbers_ok():
     assert numbers_ok('12.5 cases per 100k', 'cases 3 → 12.5 per 100k')
     assert not numbers_ok('40% of us', 'cases 3 → 12.5')
+    assert numbers_ok('1,200 deaths, 1.50 per 100k', 'deaths 1200; rate 1.5 per 100k')  # separators and trailing zeros normalized
+    assert not numbers_ok('1,234,567 deaths', 'deaths 1,234')                   # a long number is one number
+    assert not numbers_ok('Twelve countries closed borders', 'countries 3')    # invented counts in words
+    assert not numbers_ok('half the city lost power', 'outages 300')

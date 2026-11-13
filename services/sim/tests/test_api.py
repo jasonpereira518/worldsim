@@ -31,7 +31,7 @@ def test_sse_contract_and_report():
     frame = next(d['frame'] for k, d in ev if k == 'frame')
     assert set(frame) >= {'t', 'date', 'deltas', 'bubbles', 'events', 'flows', 'metrics', 'layers', 'band'}
     md = c.get(f'/runs/{rid}/report.md').text
-    for n in range(1, 12):
+    for n in range(1, 13):
         assert f'## {n}. ' in md
     # replay serves the same frames without recomputing
     again = [d for k, d in events(rid) if k == 'frame']
@@ -61,3 +61,14 @@ def test_validation_and_unknown_run():
     assert c.post('/runs', json={'prompt': ''}).status_code == 422
     assert c.get('/runs/run_doesnotexist/stream').status_code == 404
     assert c.get('/runs/..%2Fetc/stream').status_code == 404
+
+
+def test_concurrent_report_requests_run_the_pipeline_once():
+    from concurrent.futures import ThreadPoolExecutor
+    from fastapi.testclient import TestClient
+    from worldsim import api
+    c = TestClient(api.app)
+    rid = c.post('/runs', json={'prompt': 'A magnitude 7.0 earthquake hits Port-au-Prince, Haiti'}).json()['run_id']
+    with ThreadPoolExecutor(2) as ex:
+        reports = list(ex.map(lambda _: c.get(f'/runs/{rid}/report').json(), range(2)))
+    assert [r['appendix']['run']['ensemble_size'] for r in reports] == [api.ENSEMBLE, api.ENSEMBLE]

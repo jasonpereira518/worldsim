@@ -113,8 +113,9 @@ def appendix(run) -> dict:
         {'id': 'ne_places', 'name': 'Natural Earth populated places 1:50m', 'source': 'Natural Earth v5.1.1', 'as_of': '2022-05-13', 'license': 'Public domain', 'confidence': 'medium'},
         {'id': 'basemap', 'name': 'OpenFreeMap vector tiles (OpenMapTiles schema)', 'source': '© OpenStreetMap contributors', 'as_of': None, 'license': 'ODbL', 'confidence': 'high'},
     ]
-    assumptions = [a.model_dump() for a in spec.assumptions] + [p.assumption(p.key in run.overrides).model_dump() for p in run.priors] + \
-                  [a.model_dump() for a in run.ctx.pop.assumptions]
+    prior_keys = {p.key for p in run.priors}  # a prior is the effective value; its spec twin (user or agent edit) is not repeated
+    assumptions = [a.model_dump() for a in spec.assumptions if a.id not in prior_keys] + \
+                  [p.assumption(p.key in run.overrides).model_dump() for p in run.priors] + [a.model_dump() for a in run.ctx.pop.assumptions]
     return {'datasets': datasets, 'assumptions': assumptions,
             'run': {'run_id': run.config.run_id, 'seed': run.config.seed, 'engine': run.config.engine_version, 'snapshot': run.config.data_snapshot,
                     'ensemble_size': len(run.ensemble), 'median_member': run.median, 'parser': spec.parser, 'parent_run_id': run.config.parent_run_id,
@@ -134,28 +135,123 @@ def decision_points(run) -> list[dict]:
     return out
 
 
-HEADLINE_SCHEMA = {'type': 'object', 'additionalProperties': False, 'required': ['paragraph'], 'properties': {'paragraph': {'type': 'string'}}}
+def decisions(run) -> dict | None:
+    """Who decided what: each actor policy, in how many ensemble runs it fired and when, what it did in the median run,
+    and what the one re-plan round changed (median over the same paired members before and after)."""
+    pols, crowds = run.config.spec.policies, run.config.spec.behavior
+    if not pols and not crowds:
+        return None
+    items, vals, n = run.module.policy_menu, {p.key: p for p in run.priors}, len(run.ensemble)
+    rows = []
+    for pol in pols:
+        item = items.get(pol.action)
+        if not item:
+            continue
+        days = [min(d['day'] for d in tr.decisions if d['policy'] == pol.id) for tr in run.ensemble if any(d['policy'] == pol.id for d in tr.decisions)]
+        thr, lag = vals[f'pol_{pol.id}_threshold'], vals[f'pol_{pol.id}_lag']
+        rows.append({'id': pol.id, 'actor': pol.actor_label, 'action': item['label'], 'scope': pol.scope, 'rationale': pol.rationale, 'revised': pol.revised,
+                     'trigger': f'{item["metric_label"]} reaches {fmt(thr.value)} {thr.unit}', 'lag_days': lag.value, 'origin': thr.origin,
+                     'fired_runs': len(days), 'n': n, 'median_day': float(np.median(days)) if days else None,
+                     'median_run': [{'day': d['day'], 'countries': d['countries'][:8], 'n_countries': len(d['countries'])}
+                                    for d in run.traj.decisions if d['policy'] == pol.id][:5]})
+    out = {'policies': rows, 'adaptation': None,
+           'crowds': [{'label': st.label, 'stances': {d.replace('_', ' '): v for d, v in st.stances.items()}, 'rationale': st.rationale}
+                      for st in crowds]}
+    rp = run.agent_state.get('replan')
+    if rp and rp.get('first_look'):
+        look, key = rp['first_look'], run.module.outcome_spec[0][0]
+        k = min(look['n'], n)
+        out['adaptation'] = {'n': k, 'name': look['outcome']['name'], 'unit': look['outcome']['unit'], 'before': look['outcome']['p50'],
+                             'after': float(np.nanmedian([tr.outcomes.get(key, np.nan) for tr in run.ensemble[:k]])), 'revised': rp.get('revised', False),
+                             'first_plan': rp.get('first_plan', [])}
+    return out
 
 
-def headline(run) -> tuple[str, str]:
+HEADLINE_SCHEMA = {'type': 'object', 'additionalProperties': False, 'required': ['paragraph', 'scale_paragraph'],
+                   'properties': {'paragraph': {'type': 'string'}, 'scale_paragraph': {'type': 'string'}}}
+
+
+def facts(run, dec: dict | None) -> str:
+    """Everything the reporter and the critic may state, as text: their numbers are checked against it."""
+    s, spec = run.summary, run.config.spec
+    end = add_days(spec.start_date, run.ctx.steps * run.ctx.dt)
+    L = [f'Scenario: {spec.title}', f'Prompt: {spec.prompt}', f'Horizon end: {end}', f'Ensemble: {len(run.ensemble)} runs', 'Outcomes:']
+    L += [f'- {m.name}: {fmt(m.value)} {m.unit} (90% interval {fmt(m.low)}–{fmt(m.high)})' for m in s.metrics[:4]]
+    L.append(f'Mechanisms: {", ".join(run.module.mechanisms)}')
+    sc = run.scale
+    if sc:
+        r = sc['measurement']['reach']
+        L.append('Reach across runs: ' + ', '.join(f'{REACH_LABEL[c]} {v * 100:.0f}%' for c, v in r['distribution'].items() if v > 0))
+        L.append(f'Plausibility: {sc["plausibility"]["verdict"]}' if sc.get('plausibility') else 'Plausibility: not assessed')
+        L += [f'- vs {m["name"]}: historical {fmt(m["value"])} {m["metric_name"].lower()}, simulated median {fmt(m["sim"]["p50"])}, {m["band"]}'
+              for m in sc['measurement']['magnitude']]
+        L += [f'- path "{b["title"]}": median {fmt(b["size"]["p50"])}; {b["exceedance"]["k"]} of {b["exceedance"]["n"]} base runs reach it'
+              + (f'; assessor said {b["likelihood"]}' if b.get('likelihood') else '') for b in sc['branches'] if b.get('size') and b.get('exceedance')]
+    for p in (dec or {}).get('policies', []):
+        L.append(f'- policy: {p["actor"]}, {p["action"]} when {p["trigger"]}; fired in {p["fired_runs"]} of {p["n"]} runs')
+    for c in (dec or {}).get('crowds', []):
+        L.append(f'- crowd: {c["label"]}: ' + '; '.join(f'{k}: {v}' for k, v in c['stances'].items()))
+    L += [f'- sensitivity: {r["text"]}: {fmt(r["outcome_low"])} to {fmt(r["outcome_high"])}' for r in run.sensitivity[:3]]
+    return '\n'.join(L)
+
+
+def reporter(run, text: str) -> tuple[str, str, str | None]:
+    """Headline paragraph and scale narrative (LLM), each kept only if every number in it is in the facts."""
     s = run.summary
     k = s.metrics[0]
     end = add_days(run.config.spec.start_date, run.ctx.steps * run.ctx.dt)
     lines = [f'{m.name}: {fmt(m.value)} {m.unit} (90% interval {fmt(m.low)}–{fmt(m.high)})' for m in s.metrics[:4]]
-    text = (f'By {end}, the median simulated {k.name.lower()} is {fmt(k.value)} {k.unit} (90% interval {fmt(k.low)}–{fmt(k.high)}). '
+    head = (f'By {end}, the median simulated {k.name.lower()} is {fmt(k.value)} {k.unit} (90% interval {fmt(k.low)}–{fmt(k.high)}). '
             + ' '.join(f'{l}.' for l in lines[1:3]) + f' Driven by {", ".join(run.module.mechanisms[:3])}. '
             f'{len(run.ensemble)}-run ensemble, {confidence_section(run)["overall"]} confidence; a simulation, not a forecast.')
     if llm.enabled():
-        facts = f'Scenario: {run.config.spec.title}\nHorizon end: {end}\nOutcomes:\n' + '\n'.join(lines) + f'\nMechanisms: {", ".join(run.module.mechanisms)}'
-        out = llm.structured(llm.prompt('report_headline'), facts, HEADLINE_SCHEMA, budget=run.budget, max_tokens=1500)
-        if out and numbers_ok(out['paragraph'], facts):
-            return out['paragraph'], 'llm'
-    return text, 'template'
+        out = llm.structured(llm.prompt('report_headline'), text, HEADLINE_SCHEMA, budget=run.budget, max_tokens=2000)
+        if out:
+            narrative = out['scale_paragraph'] if out.get('scale_paragraph') and numbers_ok(out['scale_paragraph'], text) else None
+            if numbers_ok(out['paragraph'], text):
+                return out['paragraph'], 'llm', narrative
+            return head, 'template', narrative
+    return head, 'template', None
+
+
+def rule_flags(run, dec: dict | None) -> list[dict]:
+    """Deterministic checks of the agents' choices against what the engine measured."""
+    out = [{'kind': 'policy_never_fired', 'text': f'{p["actor"]}: {p["action"]} never fired in {p["n"]} runs ({p["trigger"]} was not reached).',
+            'generator': 'rules'} for p in (dec or {}).get('policies', []) if p['fired_runs'] == 0]
+    sc = run.scale or {}
+    for b in sc.get('branches', []):
+        if b.get('likelihood') == 'likely' and b.get('computed_likelihood') == 'unlikely':
+            ex = b['exceedance']
+            out.append({'kind': 'likely_branch_never_reached', 'generator': 'rules',
+                        'text': f'The scale assessor judged "{b["title"]}" likely, but only {ex["k"]} of {ex["n"]} base runs reach that size.'})
+    m = sc.get('measurement', {})
+    f = m.get('forecast')
+    if f and not f['reach_hit']:
+        out.append({'kind': 'forecast_missed', 'generator': 'rules',
+                    'text': f'The scale assessor expected {REACH_LABEL[f["reach_expected"]]} reach; most runs were {REACH_LABEL[m["reach"]["mode"]]}.'})
+    mags = [x for x in m.get('magnitude', []) if x['metric'] == m.get('headline_metric')]
+    if mags and all(x['band'] in ('far below', 'far above') for x in mags):
+        out.append({'kind': 'outside_analog_range', 'generator': 'rules',
+                    'text': 'The simulated outcome is more than ten times away from every comparable past event in the library.'})
+    return out
 
 
 def build_report(run) -> dict:
-    head, gen = headline(run)
-    spec = run.config.spec
+    from concurrent.futures import ThreadPoolExecutor
+    from . import agents
+    spec, dec = run.config.spec, decisions(run)
+    stored = run.agent_state.get('report_text')  # agent prose from the first finish, so a replay makes no calls
+    if stored is None:
+        text = facts(run, dec)
+        with ThreadPoolExecutor(2) as ex:  # reporter and critic in parallel
+            rep, crit = ex.submit(reporter, run, text), ex.submit(agents.critic, run, text, run.budget, run.audit)
+            head, gen, narrative = rep.result()
+            stored = {'headline': head, 'headline_generator': gen, 'scale_narrative': narrative, 'flags': crit.result()}
+        if llm.enabled():
+            run.agent_state['report_text'] = stored
+    conf = confidence_section(run)
+    conf['flags'] = rule_flags(run, dec) + stored['flags']
+    head, gen = stored['headline'], stored['headline_generator']
     return {
         'run_id': run.config.run_id, 'title': spec.title, 'prompt': spec.prompt, 'event_type': spec.event_type, 'module': run.module.name,
         'generated_at': dt.datetime.now(dt.UTC).isoformat(timespec='seconds'), 'start_date': spec.start_date,
@@ -164,7 +260,8 @@ def build_report(run) -> dict:
         'key_outcomes': [m.model_dump() for m in run.summary.metrics],
         'timeline': timeline(run), 'geography': geography(run), 'winners_losers': winners_losers(run), 'voices': pick_voices(run),
         'causal': run.traj.causal, 'sensitivities': run.sensitivity, 'decision_points': decision_points(run),
-        'confidence': confidence_section(run), 'appendix': appendix(run),
+        'confidence': conf, 'appendix': appendix(run), 'decisions': dec,
+        'scale': {**run.scale, 'narrative': stored['scale_narrative']} if run.scale else None,
         'series': {'key': run.module.key_metric, 'unit': run.module.key_unit, 'dates': [f.date for f in run.frames],
                    'band': [f.band for f in run.frames]},
     }
@@ -174,14 +271,77 @@ def _n(v, unit=''):
     return f'{fmt(v)}' if isinstance(v, (int, float)) else str(v)
 
 
+REACH_LABEL = {'local': 'local', 'regional': 'regional', 'national': 'national', 'multi_country': 'multi-country', 'global': 'global'}
+
+
+def scale_markdown(s: dict | None) -> list[str]:
+    L = ['## 2. Scale and plausibility', '']
+    if not s:
+        return L + ['Not assessed for this run.', '']
+    if s.get('narrative'):
+        L += [s['narrative'], '']
+    p = s.get('plausibility')
+    if p:
+        L += [f'Plausibility: **{p["verdict"]}**' + (f'. {"; ".join(p["reasons"])}' if p.get('reasons') else '') + '.', '']
+    r = s['measurement']['reach']
+    dist = ', '.join(f'{REACH_LABEL[c]} {v * 100:.0f}%' for c, v in r['distribution'].items() if v > 0)
+    n = r.get('countries')
+    L += [f'Reach, measured across the ensemble: **{REACH_LABEL[r["mode"]]}** ({dist} of runs)'
+          + (f'; countries materially affected: median {n["p50"]:.0f} (90% interval {n["p5"]:.0f}–{n["p95"]:.0f}).' if n else '.')]
+    f = s['measurement'].get('forecast')
+    if f:
+        L += [f'Scale assessor forecast: {REACH_LABEL[f["reach_expected"]]} reach ({"matched" if f["reach_hit"] else "did not match"} the measurement; '
+              f'{f["reach_share"] * 100:.0f}% of runs).']
+    L += ['', s['measurement']['position'], '']
+    rows = s['measurement']['magnitude']
+    if rows:
+        L += ['| Analog | Metric | Historical | Simulated median (90% interval) | Band | Source |', '|---|---|---:|---:|---|---|']
+        L += [f'| {m["name"]} | {m["metric_name"]} | {fmt(m["value"])} | {fmt(m["sim"]["p50"])} ({fmt(m["sim"]["p5"])}–{fmt(m["sim"]["p95"])}) | {m["band"]} | '
+              f'{m["source"]}{"; " + m["definition"] if m["definition"] else ""} |' for m in rows]
+        L.append('')
+    if s.get('branches'):
+        L += ['**Escalation paths** (sized by re-running the ensemble with the named assumptions in their tails):', '']
+        for b in s['branches']:
+            size, ex = b.get('size'), b.get('exceedance')
+            line = f'- **{b["title"]}**: {b["path"]}.'
+            if size:
+                line += f' Headline outcome median {fmt(size["p50"])} (90% interval {fmt(size["p5"])}–{fmt(size["p95"])}).'
+            if ex:
+                line += f' {ex["k"]} of {ex["n"]} base runs reached {ex["direction"]} that size ({b["computed_likelihood"]})'
+                line += f'; the assessor judged it {b["likelihood"]}.' if b.get('likelihood') else '.'
+            L.append(line)
+        L.append('')
+    return L
+
+
+def decisions_markdown(d: dict | None) -> list[str]:
+    if not d:
+        return []
+    L = ['', '**Who decided what** (actor policies chosen by the actors agent; the engine decides when each fires):', ''] if d['policies'] else []
+    for p in d['policies']:
+        when = f'fired in {p["fired_runs"]} of {p["n"]} runs' + (f', median day {p["median_day"]:.0f}' if p['median_day'] is not None else '')
+        L.append(f'- **{p["actor"]}**: {p["action"]} ({p["scope"].replace("group:", "")}) when {p["trigger"]}, taking effect after {fmt(p["lag_days"])} days; '
+                 f'{when}.' + (f' {p["rationale"]}' if p['rationale'] else '') + (' *Revised after the first look.*' if p['revised'] else ''))
+    a = d.get('adaptation')
+    if a:
+        L += ['', f'Re-plan: after a first look at {a["n"]} runs the actors {"revised" if a["revised"] else "kept"} their plan; over those runs the median '
+                  f'{a["name"].lower()} went from {fmt(a["before"])} to {fmt(a["after"])} {a["unit"]}.']
+    if d.get('crowds'):
+        L += ['', '**How populations behave** (crowds agent, relative to the model\'s typical behavior):', '']
+        L += [f'- {c["label"]}: ' + '; '.join(f'{k}: {v}' for k, v in c['stances'].items()) + '.' + (f' {c["rationale"]}' if c['rationale'] else '')
+              for c in d['crowds']]
+    return L
+
+
 def to_markdown(r: dict) -> str:
     L = [f'# {r["title"]}', '', f'> {r["disclaimer"]}', '', f'Prompt: *{r["prompt"]}*  ', f'Horizon: {r["start_date"]} to {r["end_date"]} · module: {r["module"]}', '',
-         '## 1. Headline', '', r['headline'], '', '## 2. Key outcomes', '', '| Metric | Median | 50% interval | 90% interval | Unit | Confidence |', '|---|---:|---:|---:|---|---|']
+         '## 1. Headline', '', r['headline'], ''] + scale_markdown(r.get('scale')) + \
+        ['## 3. Key outcomes', '', '| Metric | Median | 50% interval | 90% interval | Unit | Confidence |', '|---|---:|---:|---:|---|---|']
     for m in r['key_outcomes']:
         L.append(f'| {m["name"]} | {_n(m["value"])} | {_n(m["low50"])}–{_n(m["high50"])} | {_n(m["low"])}–{_n(m["high"])} | {m["unit"]} | {m["confidence"]} |')
-    L += ['', '## 3. Timeline of key moments', '']
+    L += ['', '## 4. Timeline of key moments', '']
     L += [f'- **{e["date"]}** (day {e["day"]}) {e["title"]}. Cause: {e["cause"]}.' + (f' Places: {", ".join(e["places"])}.' if e['places'] else '') for e in r['timeline']]
-    L += ['', '## 4. Geographic breakdown', '']
+    L += ['', '## 5. Geographic breakdown', '']
     g = r['geography']
     if g['layer']:
         L += [f'Top 10 by {g["layer"]["label"].lower()} ({g["layer"]["unit"]}):', '']
@@ -191,25 +351,27 @@ def to_markdown(r: dict) -> str:
             cols = list(rows[0].keys())
             L += ['', f'**{name.replace("_", " ").capitalize()}**', '', '| ' + ' | '.join(cols) + ' |', '|' + '---|' * len(cols)]
             L += ['| ' + ' | '.join(str(row[c]) for c in cols) + ' |' for row in rows]
-    L += ['', '## 5. Winners and losers', '']
+    L += ['', '## 6. Winners and losers', '']
     for side in ('winners', 'losers'):
         L += [f'**{side.capitalize()}**', '']
         L += [f'- {w["name"]}: {w["why"]}' + (f' ({w["detail"]})' if w.get('detail') else '') for w in r['winners_losers'][side]] or ['- none identified']
         L.append('')
-    L += ['## 6. Voices', '']
+    L += ['## 7. Voices', '']
     L += [f'> "{v["quote"]}"  \n> {v["persona"]}, {v["date"]}. Data: {v["data"]}.' + '\n' for v in r['voices']]
-    L += ['## 7. Causal chain', '']
+    L += ['## 8. Causal chain', '']
     nodes = {n['id']: n['label'] for n in r['causal'].get('nodes', [])}
     L += [f'- {nodes.get(e["from"], e["from"])} → {nodes.get(e["to"], e["to"])}' + (f' ({e["label"]})' if e.get('label') else '') for e in r['causal'].get('edges', [])]
-    L += ['', '## 8. Sensitivities and risks', '', '| Assumption | Range | Outcome at low | Outcome at high |', '|---|---|---:|---:|']
+    L += ['', '## 9. Sensitivities and risks', '', '| Assumption | Range | Outcome at low | Outcome at high |', '|---|---|---:|---:|']
     L += [f'| {s["text"]} | {s["low"]:g}–{s["high"]:g} {s["unit"]} | {_n(s["outcome_low"])} | {_n(s["outcome_high"])} |' for s in r['sensitivities']]
-    L += ['', '## 9. Decision points', '', '*Analysis of what would have changed the simulated outcome, not a recommendation.*', '']
+    L += ['', '## 10. Decision points', '', '*Analysis of what would have changed the simulated outcome, not a recommendation.*', '']
     L += [f'- **{d["action"]}** when {d["trigger"]}: {d["effect"]} ({d["basis"]}).' for d in r['decision_points']]
+    L += decisions_markdown(r.get('decisions'))
     c = r['confidence']
-    L += ['', '## 10. Confidence and limitations', '', f'Overall: **{c["overall"]}**.', ''] + [f'- {x}' for x in c['reasons']]
+    L += ['', '## 11. Confidence and limitations', '', f'Overall: **{c["overall"]}**.', ''] + [f'- {x}' for x in c['reasons']]
+    L += [f'- Flag ({f["kind"].replace("_", " ")}{", AI critic" if f["generator"] == "llm" else ""}): {f["text"]}' for f in c.get('flags', [])]
     L += [f'- Data gap: {x}' for x in c['data_gaps']] + [f'- Stale source: {x}' for x in c['stale_sources']] + [f'- Calibration: {c["calibration"]}']
     L += [f'- Analog: {a["name"]}: {a["outcomes"]} ({a["source"]})' for a in c.get('analogs', [])]
-    L += ['', '## 11. Sources and assumptions', '', '| Dataset | Source | As of | License |', '|---|---|---|---|']
+    L += ['', '## 12. Sources and assumptions', '', '| Dataset | Source | As of | License |', '|---|---|---|---|']
     L += [f'| {d["name"]} | {d["source"]} | {d.get("as_of") or "n/a"} | {d["license"]} |' for d in r['appendix']['datasets']]
     L += ['', '| Assumption | Value | Origin | Confidence | Source |', '|---|---|---|---|---|']
     L += [f'| {a["text"]} | {a["value"] if a["value"] is not None else ""} {a.get("unit") or ""} | {a["origin"]} | {a["confidence"]} | {a.get("source") or ""} |'

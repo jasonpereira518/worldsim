@@ -51,11 +51,92 @@ class Place(BaseModel):
 
 class Intervention(BaseModel):
     """A user-specified policy change, e.g. borders close on day 10."""
-    kind: Literal['border_closure', 'lockdown', 'vaccine', 'price_change', 'tariff_change', 'aid', 'custom']
+    kind: Literal['border_closure', 'lockdown', 'vaccine', 'price_change', 'tariff_change', 'aid', 'retaliation', 'custom']
     day: int
-    value: float | None = None
+    value: float | None = None  # rate or price change; for a policy lockdown, its duration in days (None = until the horizon)
     countries: list[str] = Field(default_factory=list)  # empty = everywhere
     text: str
+
+
+ReachClass = Literal['local', 'regional', 'national', 'multi_country', 'global']
+
+
+class Plausibility(BaseModel):
+    """Is the premise realistic? 'impossible' stops the run with a clarifying question."""
+    verdict: Literal['realistic', 'stretched', 'implausible', 'impossible']
+    reasons: list[str] = Field(default_factory=list)
+    adjusted_premise: str | None = None
+    generator: Literal['rules', 'llm'] = 'rules'
+
+
+class PriorTail(BaseModel):
+    key: str
+    side: Literal['upper', 'lower']
+
+
+class EscalationBranch(BaseModel):
+    """A path to a larger (or smaller) event, described by choices only. The engine sizes it and counts how many
+    base runs reach that size; `likelihood` is the agent's label, scored against that count."""
+    id: str
+    title: str
+    path: str
+    trigger: str
+    likelihood: Literal['unlikely', 'possible', 'likely'] | None = None
+    tails: list[PriorTail] = Field(default_factory=list)
+    disable_policies: bool = False
+
+
+class AnalogBand(BaseModel):
+    analog_id: str
+    band: Literal['far below', 'below', 'comparable', 'above', 'far above']
+    why: str = ''
+
+
+class ScaleHypothesis(BaseModel):
+    """The scale assessor's forecast, written before the engine's numbers exist and scored against them."""
+    reach_expected: ReachClass
+    reach_why: str
+    analog_bands: list[AnalogBand] = Field(default_factory=list)
+    branches: list[EscalationBranch] = Field(default_factory=list)
+    generator: Literal['rules', 'llm'] = 'llm'
+
+
+class AgentStep(BaseModel):
+    """One agent role's work on a run: streamed as an `agent` event and kept in the run file for replays."""
+    role: str
+    model: str
+    status: Literal['running', 'done', 'skipped', 'failed']
+    summary: str
+    usd: float = 0.0
+    evidence: list[str] = Field(default_factory=list)
+
+
+class Policy(BaseModel):
+    """An actor's conditional decision, chosen from the module's policy menu: when `trigger_metric` crosses a threshold
+    in the scoped countries, take `action` after a lag. Threshold, lag and duration are priors (pol_<id>_*), so the
+    ensemble samples them and sensitivity ranks them; the policy itself carries no free numbers."""
+    id: str
+    actor_id: str
+    actor_label: str
+    action: str
+    scope: str  # 'origin' | 'all' | 'group:<World Bank income group>'
+    trigger_metric: str
+    rationale: str = ''
+    evidence: list[str] = Field(default_factory=list)
+    revised: bool = False
+
+
+StanceLabel = Literal['much lower', 'lower', 'typical', 'higher', 'much higher']
+
+
+class CrowdStance(BaseModel):
+    """How one population cluster behaves relative to the module's typical assumption, per behavior dimension. Labels
+    only: code maps each label to a multiplier band, which becomes a prior beh_<cluster>_<dim>."""
+    cluster: str  # 'origin' | 'group:<World Bank income group>'
+    label: str
+    stances: dict[str, StanceLabel]
+    rationale: str = ''
+    evidence: list[str] = Field(default_factory=list)
 
 
 class ScenarioSpec(BaseModel):
@@ -77,6 +158,10 @@ class ScenarioSpec(BaseModel):
     module: str
     parser: Literal['rules', 'llm']
     confidence: Confidence
+    plausibility: Plausibility | None = None
+    scale: ScaleHypothesis | None = None
+    policies: list[Policy] = Field(default_factory=list)
+    behavior: list[CrowdStance] = Field(default_factory=list)
 
     model_config = {'populate_by_name': True}
 

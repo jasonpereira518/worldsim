@@ -1,10 +1,10 @@
 # Worldsim — Architecture v0
 
-Status: Milestone 1 (data layer v1). Simulated today (t0) is Tuesday 2026-10-20. Every output is labeled a simulation, not a forecast or advice.
+Status: Milestone 6 (agents layer and scale). Simulated today (t0) is Tuesday 2026-10-20. Every output is labeled a simulation, not a forecast or advice.
 
 ## 1. Principles
 
-1. Numbers come from data or quantitative models. LLMs parse prompts, voice personas, and write prose; an LLM never emits a number the engine did not compute.
+1. Numbers come from data or quantitative models. Agents choose and judge; the engine computes. An agent may place a parameter inside a range defined in code (it becomes a prior with origin `llm`, clamped, cited and editable), but no agent states an outcome or a probability, and prose with a number absent from its inputs is cut.
 2. Every value carries provenance `{source, as_of, confidence, license}`. Missing data becomes a labeled assumption, never a silent invention.
 3. The client is a player. It renders a stream of frames, scrubs them, and asks questions. It computes no outcomes.
 4. Reproducible: `(seed, ScenarioSpec, data_snapshot)` replays any run bit for bit.
@@ -229,7 +229,7 @@ Deviations from the plan above, with the reason:
 | trade | gravity bilateral flows × product share, pass-through, import elasticity, diversion, retaliation, tariff revenue | GDP, distance | lost imports |
 | generic | stock-and-flow impact from the origin with hub spillovers, attention and recovery; parameters from the event class and the analog library; always low confidence | population | people materially affected |
 
-**Persona cognition.** Bubbles are templates filled with the persona's own numbers by default. With `WORLDSIM_LLM=on`, up to 8 routine reactions per step go to Claude Haiku 5.5 and up to 4 institutional voices to Claude Opus 5.5 as JSON-schema calls; a line is accepted only if every number in it appears in its input (`voices.numbers_ok`), otherwise the template is used. `llm.Budget` caps calls per step, per run and in dollars; responses are cached on disk by prompt hash. The parser and the report headline use the same validated path. Prompts live in `worldsim/prompts/` with a version header.
+**Persona cognition.** Bubbles are templates filled with the persona's own numbers by default. With `WORLDSIM_LLM=on`, up to 8 routine reactions per step go to Claude Haiku 5.5 and up to 4 institutional voices to Claude Sonnet 5.5 (Opus before M6) as JSON-schema calls; a line is accepted only if every number in it appears in its input (`voices.numbers_ok`), otherwise the template is used. `llm.Budget` caps calls per step, per run and in dollars; responses are cached on disk by prompt hash. The parser and the report headline use the same validated path. Prompts live in `worldsim/prompts/` with a version header.
 
 **Uncertainty.** Summary metrics are medians with 5th–95th and 25th–75th percentiles across the ensemble; the timeline draws the band per step. Confidence per output is one rule (`engine.confidence`): low without data, in generic mode, or when more than 12 low-confidence priors drive the run.
 
@@ -246,6 +246,34 @@ Deviations from the plan, with the reason:
 5. **Branching re-runs from day 0** with the parent's seed and the new interventions at their day, rather than resuming saved mid-run state; `branch_at` records where the user asked.
 6. **Feeds:** USGS and WHO Disease Outbreak News are wired with cache and stale flags. GDELT and market prices are not: GDELT's API is unstable for unattended use and market data needs a licensed provider.
 7. **Run storage** is JSON configs on disk (`services/sim/runs/`) plus an in-memory cache of recent runs; frames are recomputed from the config on replay.
+
+### M6 as built: agents layer and scale
+
+**Rules.** Agents make categorical choices and place values inside code-defined ranges; Python clamps (JSON schemas cannot enforce min/max) and rejects proposals that cite evidence ids no tool returned. Every decision is written into the `ScenarioSpec` (`assumptions` with origin `llm`, `policies`, `behavior`, `scale`, `plausibility`), so `(seed, spec, snapshot)` still replays a run exactly and branches inherit decisions. Agent prose (report paragraphs, critic flags, voice lines) is stored in the run file's `agents` block, so a replay makes no API call. `runs/<id>.agents.jsonl` audits every call but is never needed for replay. With the LLM off, every role keeps its rule-based path and the golden runs are unchanged.
+
+**Roles** (`worldsim/agents.py`, prompts `worldsim/prompts/agent_*.md`; a dict of roles and plain functions, no orchestrator):
+
+| Role | Model | When | Writes |
+|---|---|---|---|
+| Intake | Opus 5.5, low | `POST /runs` | event fields, plausibility verdict (impossible → clarifying question) |
+| Calibrator | Sonnet 5.5, medium | setup, parallel | origin-`llm` assumptions that narrow module priors |
+| Actors | Sonnet 5.5, medium | setup, parallel, when the module has a policy menu | `spec.policies` + their prior centers |
+| Crowds | Haiku 5.5, low | setup, parallel, when the module has behavior dimensions | `spec.behavior` stances |
+| Scale assessor | Opus 5.5, medium | background after setup | `spec.scale`: reach forecast, analog bands, escalation paths as prior tails |
+| Actors, re-plan | Sonnet 5.5, low | after a first look at 8 paired runs | revised `spec.policies`; first plan kept for the adaptation effect |
+| Reporter, critic | Opus 5.5, Sonnet 5.5 | `finish()`, in parallel | headline and scale paragraphs; judgment flags |
+
+`llm.agent` is a manual tool-use loop: strict read-only tools from `worldsim/evidence.py` (gazetteer, country profiles, indicator series, companies, analogs, priors), the final answer as a JSON schema in the same request, `tool_choice` auto with `none` on the last turn, top-level prompt caching, and sub-budgets that also charge the run budget ($1.00 and 80 calls by default; voices get $0.18 and 60 calls of it).
+
+**Scale** (`worldsim/scale.py`, deterministic). Each module sets `Trajectory.affected_loc` (people materially affected per location). Reach class per ensemble member: local, regional, national (≥25% of the country), multi-country, global (≥25 countries on ≥3 continents), each needing at least 100 people and 0.01% of a country. Magnitude: the headline outcome against same-module analogs in bands (far below <0.1×, below, comparable within 3×, above, far above >10×). Escalation paths: priors pushed into their tails (or all policies disabled), re-run on the base members' seeds, with the count of base runs that reach the path's median. The assessor's forecast is scored against all of this, and each streamed run appends forecast and measurement to `runs/calibration.jsonl`.
+
+**Actor policies** (`modules/base.py`). A module's `policy_menu` lists actions with a trigger metric and ranges for threshold, lag and duration (epidemiology: stay-at-home order, border closure, vaccine program; disaster: relief deployment; trade: retaliatory tariffs). Each policy's numbers are priors `pol_<id>_*`, so the ensemble samples them and sensitivity ranks them; `fire_policies` is RNG-free and fires per country for country metrics, so a detail run still equals its member.
+
+**Crowd behavior.** A module's `behavior_dims` (epidemiology: contact reduction, compliance; launch: adoption willingness) take stance labels per cluster (origin country, World Bank income groups). Code maps each label to a multiplier band and makes it a prior `beh_<cluster>_<dim>`, appended after the module's priors so earlier draws are unchanged.
+
+**Evaluation.** `evals/scale_cases.jsonl` phrases eleven historical events as prompts; `tests/test_scale_eval.py` scores reach class and magnitude band against the analog library on the real snapshot (2026-10-24: reach 8 of 11, within 10× in 6 of 10) and fails below those floors.
+
+Not built: per-persona LLM agents, per-step LLM decisions inside a run, an LLM orchestrator, fine-tuning. Actors do not yet replace the hard-coded institution personas, and disaster, trade and generic have no crowd dimensions.
 
 ## 10. Open decisions
 

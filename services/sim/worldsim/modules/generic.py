@@ -116,7 +116,7 @@ class Generic(Module):
             flows.append(fl)
         out = {'affected_pop': float(ever.sum()), 'countries': float(reached.sum()), 'peak_day': float(np.argmax(series) * ctx.dt),
                'aware_pop': float((ctx.p_pop * np.clip(0.3 + me, 0, 1)).sum())}
-        traj = Trajectory(key=key, metrics=metrics, outcomes=out)
+        traj = Trajectory(key=key, metrics=metrics, outcomes=out, affected_loc=ever.copy())  # people materially affected
         if detail:
             traj.p_status, traj.p_metric, traj.i_status, traj.i_metric = p_status, p_metric, i_status, i_metric
             traj.layers, traj.flows, traj.events = layers, flows, events

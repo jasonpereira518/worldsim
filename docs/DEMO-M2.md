@@ -41,7 +41,7 @@ Click **Show model assumptions** on the interpretation card. Every numeric prior
 cd services/sim && WORLDSIM_LLM=on ANTHROPIC_API_KEY=... .venv/bin/python -m uvicorn worldsim.api:app --port 8731
 ```
 
-The parser, up to 8 routine reactions per step (Claude Haiku 5.5), up to 4 institutional voices (Claude Opus 5.5) and the report headline then use the LLM. A line is kept only when every number in it appears in its input. The budget caps default to 60 calls and $0.50 per run (`WORLDSIM_LLM_MAX_CALLS`, `WORLDSIM_LLM_MAX_USD`), and usage appears in the report's confidence section.
+The parser, up to 8 routine reactions per step (Claude Haiku 5.5), up to 4 institutional voices (Claude Sonnet 5.5 since M6) and the report headline then use the LLM. A line is kept only when every number in it appears in its input. The budget caps default to 80 calls and $1.00 per run since M6 (agent roles: `docs/DEMO-M6.md`) (`WORLDSIM_LLM_MAX_CALLS`, `WORLDSIM_LLM_MAX_USD`), and usage appears in the report's confidence section.
 
 ## 5. Checks
 

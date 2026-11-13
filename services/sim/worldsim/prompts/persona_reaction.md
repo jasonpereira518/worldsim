@@ -6,3 +6,4 @@ Write one first-person line per persona, at most 120 characters, in the persona'
 Do not state any number that is not in the input. Do not invent named people, brands, or events.
 Also return the persona's decision (a short verb phrase) and emotion (one word).
 A persona with low institutional trust is skeptical of official guidance; a price-sensitive persona talks about cost.
+When a crowd stance is given (how this persona's population behaves relative to typical, e.g. compliance lower), let the line and decision reflect it.

@@ -11,7 +11,7 @@ import re
 import numpy as np
 
 from ..geo import EU27
-from .base import STATUS, TRAITS, Context, Module, Prior, Trajectory, monotone
+from .base import STATUS, TRAITS, Context, Module, Prior, Trajectory, fire_policies, monotone
 
 GRAVITY = 'Tinbergen (1962) gravity model; distance elasticity ~1 (Disdier & Head 2008 meta-analysis)'
 ELASTICITY = 'Import demand elasticities for manufactures typically -1.5 to -5 (Broda & Weinstein 2006; Imbs & Mejean 2015)'
@@ -76,6 +76,11 @@ class Trade(Module):
     explain_keys = [('gdp_usd', 'GDP $'), ('gdp_per_capita_usd', 'GDP per capita $'), ('inflation_pct', 'inflation %')]
     confidence = 'low'
     calibration_note = 'Baseline flows are a gravity model, not customs data; product shares are analyst priors. Treat magnitudes as order-of-magnitude.'
+    policy_menu = {
+        'retaliation': {'kind': 'retaliation', 'label': 'retaliatory tariffs on the importer', 'metric': 'lost_imports_busd',
+                        'metric_label': 'cumulative lost exports to the importer', 'level': 'global', 'threshold': (1.0, 0.1, 20.0, 'USD billion'),
+                        'lag': (56.0, 14.0, 182.0), 'scope': 'all', 'source': 'US-China tariff rounds 2018-2019: retaliation within weeks of each round (analyst prior)'},
+    }
 
     def priors(self, ctx: Context) -> list[Prior]:
         rate = next((a.value for a in ctx.spec.assumptions if a.id == 'tariff_pct'), None)
@@ -109,7 +114,11 @@ class Trade(Module):
     def simulate(self, ctx: Context, p: dict, rng: np.random.Generator, detail: bool) -> Trajectory:
         T, C, dt_w = ctx.steps, ctx.C, ctx.dt / 7
         importers, exporter, prod = resolve_parties(ctx)
-        retaliates = rng.random() < p['retaliation_prob']
+        draw = rng.random()  # drawn even when an actor decides, so the member's random stream is unchanged
+        policy_ret = any(pol.action == 'retaliation' for pol in ctx.spec.policies)
+        retaliates = draw < p['retaliation_prob'] and not policy_ret  # an actor's retaliation policy replaces the coin flip
+        ret_week = p['retaliation_week']
+        ivs, fired, decisions = list(ctx.spec.interventions), {}, []
         key = np.zeros(T + 1)
         metrics, layers, flows, events = [], [], [], []
         p_status = np.zeros((T + 1, ctx.P), np.int8) if detail else None
@@ -154,12 +163,17 @@ class Trade(Module):
             lost_rate = base_total * drop / 52 * dt_w
             cum_lost += lost_rate
             cum_div += lost_rate * p['diversion']
+            if policy_ret:
+                for iv in ivs:
+                    if iv.kind == 'retaliation' and iv.day == t and not retaliates:
+                        retaliates, ret_week = True, week
+                fire_policies(ctx, self.policy_menu, p, t, {'lost_imports_busd': cum_lost / 1e9}, fired, ivs, decisions, events if detail else None)
             cum_tariff += base_total * (1 - drop) / 52 * dt_w * tau
-            ret_on = retaliates and week >= p['retaliation_week']
+            ret_on = retaliates and week >= ret_week
             if ret_on and ret_on_t is None:
                 ret_on_t = t
             if ret_on:
-                cum_ret += ret_flow * ret_drop * (1 - np.exp(-(week - p['retaliation_week']) / p['adjust_weeks'])) / 52 * dt_w
+                cum_ret += ret_flow * ret_drop * (1 - np.exp(-(week - ret_week) / p['adjust_weeks'])) / 52 * dt_w
             years = max(week, dt_w) / 52
             exporter_gdp = -(cum_lost * p['multiplier']) / gdp[exporter] / years * 100
             importer_gdp = -(cum_ret * p['multiplier'] + cum_lost * (1 - p['diversion']) * 0.1) / gdp[imp].sum() / years * 100
@@ -229,7 +243,8 @@ class Trade(Module):
                'tariff_revenue_busd': cum_tariff / 1e9, 'retaliation': float(retaliates),
                'exporter_gdp_pct': -(cum_lost * p['multiplier']) / gdp[exporter] / years * 100,
                'importer_gdp_pct': -(cum_ret * p['multiplier'] + cum_lost * (1 - p['diversion']) * 0.1) / gdp[imp].sum() / years * 100}
-        traj = Trajectory(key=key, metrics=metrics, outcomes=out)
+        # residents of the countries party to the tariff (consumers and producers face the price or volume change)
+        traj = Trajectory(key=key, metrics=metrics, outcomes=out, affected_loc=ctx.loc_pop * (imp | (np.arange(C) == exporter))[ctx.loc_c], decisions=decisions)
         if detail:
             traj.p_status, traj.p_metric, traj.i_status, traj.i_metric = p_status, p_metric, i_status, i_metric
             traj.layers, traj.flows, traj.events = layers, flows, events
@@ -249,7 +264,7 @@ class Trade(Module):
                                      {'id': 'volume', 'label': f'-{target_drop * 100:.0f}% imports from {ctx.c_name[exporter]}'},
                                      {'id': 'diversion', 'label': f'${cum_div / 1e9:.1f}B diverted to other suppliers'},
                                      {'id': 'revenue', 'label': f'${cum_tariff / 1e9:.1f}B tariff revenue'},
-                                     {'id': 'retaliation', 'label': 'Retaliation' + (f' (week {p["retaliation_week"]:.0f})' if retaliates else ' (not in this run)')}],
+                                     {'id': 'retaliation', 'label': 'Retaliation' + (f' (week {ret_week:.0f})' if retaliates else ' (not in this run)')}],
                            'edges': [{'from': 'tariff', 'to': 'price', 'label': 'pass-through'}, {'from': 'price', 'to': 'volume', 'label': 'elasticity'},
                                      {'from': 'base', 'to': 'volume'}, {'from': 'volume', 'to': 'diversion'}, {'from': 'tariff', 'to': 'revenue'},
                                      {'from': 'volume', 'to': 'retaliation', 'label': 'provokes'}]}

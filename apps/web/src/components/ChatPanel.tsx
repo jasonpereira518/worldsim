@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useStore, type ChatMessage } from '@/lib/store';
 import { EXAMPLES, editAssumption, loadLive, loadRun, refreshHistory, shareLink, submitPrompt } from '@/lib/runClient';
 import type { Assumption, RunListItem, ScenarioSpec, SimEvent, Summary } from '@/lib/sim/types';
+import ScaleCard from './ScaleCard';
 import VoicesLog from './VoicesLog';
 import { fmtNum } from './format';
 
@@ -104,9 +105,51 @@ function SummaryCard({ summary }: { summary: Summary }) {
   );
 }
 
+const ROLE_LABEL: Record<string, string> = { calibrator: 'Calibrator', actors: 'Actors', replan: 'Actors, re-plan', crowds: 'Crowds', critic: 'Critic' };
+
+/** The AI roles that shaped the run being shown: status, what each changed, and cost. */
+function AgentRoster({ runId }: { runId?: string }) {
+  const current = useStore((s) => s.runId);
+  const steps = useStore((s) => s.agents);
+  if (!runId || runId !== current || !steps.length) return null;
+  const usd = steps.reduce((t, a) => t + (a.usd ?? 0), 0);
+  return (
+    <div className="rounded-xl border border-line p-3 text-[12px] fade-in" aria-live="polite">
+      <div className="mb-1 flex flex-wrap items-baseline gap-2">
+        <span className="font-medium">Agents</span>
+        <span className="text-[11px] text-muted">AI roles that shaped this run · <span className="num">${usd.toFixed(3)}</span></span>
+      </div>
+      <ul className="space-y-1">
+        {steps.map((a) => (
+          <li key={a.role} className="flex gap-2">
+            {/* status by fill: solid = done, pulsing ring = working, hairline = failed or skipped */}
+            <span aria-hidden className={`mt-1 inline-block h-2 w-2 shrink-0 rounded-full ${a.status === 'done' ? 'bg-ink' : a.status === 'running' ? 'animate-pulse border border-ink' : 'border border-line'}`} />
+            <span className="min-w-0 flex-1">
+              <span className="font-medium">{ROLE_LABEL[a.role] ?? a.role}</span> <span className="text-[10px] text-muted">{a.model.replace('claude-', '')} · {a.status}</span>
+              <span className="block text-muted">{a.summary}</span>
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** Scale card for the run being shown: plausibility at once, the AI forecast when ready, the measurement with the report. */
+function LiveScale({ spec, runId }: { spec: ScenarioSpec; runId?: string }) {
+  const current = useStore((s) => s.runId);
+  const live = useStore((s) => s.scale);
+  const report = useStore((s) => s.report);
+  if (!runId || runId !== current) return null;
+  const plausibility = live?.plausibility ?? spec.plausibility ?? null;
+  const hypothesis = live?.hypothesis ?? spec.scale ?? null;
+  if (!plausibility && !hypothesis && !report?.scale) return null;
+  return <ScaleCard plausibility={plausibility} hypothesis={hypothesis} scale={report?.scale} />;
+}
+
 function Message({ m }: { m: ChatMessage }) {
   if (m.role === 'user') return <div className="ml-8 self-end rounded-xl bg-ink px-3 py-1.5 text-[12px] text-bg">{m.text}</div>;
-  if (m.kind === 'spec' && m.spec) return <SpecCard spec={m.spec} runId={m.runId} />;
+  if (m.kind === 'spec' && m.spec) return <><SpecCard spec={m.spec} runId={m.runId} /><AgentRoster runId={m.runId} /><LiveScale spec={m.spec} runId={m.runId} /></>;
   if (m.kind === 'list') return <ul className="list-disc space-y-0.5 pl-4 text-[12px]">{m.items?.map((it, i) => <li key={i}>{it}</li>)}</ul>;
   return <p className="whitespace-pre-wrap text-[12px]">{m.text}</p>;
 }

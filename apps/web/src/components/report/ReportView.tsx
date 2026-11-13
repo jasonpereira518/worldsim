@@ -3,9 +3,57 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import type { Report } from '@/lib/sim/types';
 import BandChart from '../BandChart';
+import ScaleCard from '../ScaleCard';
 import { fmtNum } from '../format';
 import ReportMap from './ReportMap';
 import { layout, wrap } from './causal';
+
+/** Actor policies: the agent chose action, scope and central values; the engine decided when each fired in every run. */
+function WhoDecided({ d }: { d: NonNullable<Report['decisions']> }) {
+  const a = d.adaptation;
+  return (
+    <div className="mt-4">
+      {d.policies.length > 0 && <>
+      <h3 className="mb-1 text-[12px] font-medium">Who decided what</h3>
+      <p className="mb-2 text-[11px] text-muted">Conditional policies chosen by the actors agent. The engine decides when each one fires in every run.</p>
+      <ul className="space-y-1.5">
+        {d.policies.map((p) => (
+          <li key={p.id}>
+            <span className="font-medium">{p.actor}</span>: {p.action} <span className="text-muted">({p.scope.replace('group:', '')})</span> when {p.trigger}, after{' '}
+            <span className="num">{fmtNum(p.lag_days)}</span> days.{' '}
+            <span className="text-muted">
+              Fired in <span className="num">{p.fired_runs}</span> of <span className="num">{p.n}</span> runs
+              {p.median_day != null && <>, median day <span className="num">{Math.round(p.median_day)}</span></>}.
+            </span>
+            {p.rationale && <> {p.rationale}</>}
+            {p.revised && <span className="ml-1 text-[10px] text-muted">revised after the first look</span>}
+          </li>
+        ))}
+      </ul>
+      {a && (
+        <p className="mt-2 text-[11px] text-muted">
+          Re-plan: after a first look at <span className="num">{a.n}</span> runs the actors {a.revised ? 'revised' : 'kept'} their plan. Over those runs the median{' '}
+          {a.name.toLowerCase()} went from <span className="num">{fmtNum(a.before)}</span> to <span className="num">{fmtNum(a.after)}</span> {a.unit}.
+        </p>
+      )}
+      </>}
+      {d.crowds && d.crowds.length > 0 && (
+        <>
+          <h3 className="mb-1 mt-3 text-[12px] font-medium">How populations behave</h3>
+          <p className="mb-2 text-[11px] text-muted">Stances from the crowds agent, relative to the model&apos;s typical behavior. Each label maps to a range the ensemble samples.</p>
+          <ul className="space-y-1">
+            {d.crowds.map((c) => (
+              <li key={c.label}>
+                <span className="font-medium">{c.label}</span>: {Object.entries(c.stances).map(([k, v]) => `${k}: ${v}`).join('; ')}.
+                {c.rationale && <span className="text-muted"> {c.rationale}</span>}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </div>
+  );
+}
 
 const H = ({ n, children }: { n: number; children: React.ReactNode }) => (
   <h2 className="mt-10 mb-3 break-after-avoid border-b border-line pb-1 text-[15px] font-medium"><span className="num mr-2 text-muted">{n}.</span>{children}</h2>
@@ -111,7 +159,10 @@ export default function ReportView({ runId }: { runId: string }) {
       <p className="text-[15px] leading-snug">{r.headline}</p>
       <div className="mt-3"><BandChart bands={r.series.band} total={r.series.band.length - 1} height={60} unit={r.series.unit} playhead={r.series.band.length - 1} /></div>
 
-      <H n={2}>Key outcomes</H>
+      <H n={2}>Scale and plausibility</H>
+      {r.scale ? <ScaleCard scale={r.scale} full /> : <p className="text-muted">Not assessed for this run.</p>}
+
+      <H n={3}>Key outcomes</H>
       <table className="w-full text-[12px]">
         <thead><tr className="text-left text-[10px] text-muted"><th className="py-1 font-normal">Outcome</th><th className="py-1 text-right font-normal">Median</th><th className="py-1 text-right font-normal">50% interval</th><th className="py-1 text-right font-normal">90% interval</th><th className="py-1 pl-2 font-normal">Unit</th><th className="py-1 font-normal">Confidence</th></tr></thead>
         <tbody>{r.key_outcomes.map((m) => (
@@ -120,12 +171,12 @@ export default function ReportView({ runId }: { runId: string }) {
         ))}</tbody>
       </table>
 
-      <H n={3}>Timeline of key moments</H>
+      <H n={4}>Timeline of key moments</H>
       <ol className="space-y-1">{r.timeline.map((e, i) => (
         <li key={i} className="grid grid-cols-[110px_1fr] gap-2"><span className="num text-muted">{e.date} · d{e.day}</span><span><span className="font-medium">{e.title}.</span> <span className="text-muted">Cause: {e.cause}.{e.places.length ? ` Places: ${e.places.join(', ')}.` : ''}</span></span></li>
       ))}</ol>
 
-      <H n={4}>Geographic breakdown</H>
+      <H n={5}>Geographic breakdown</H>
       {g.layer && <p className="mb-2 text-muted">Final state, {g.layer.label.toLowerCase()} ({g.layer.unit}). Darker is higher.</p>}
       {g.layer && <ReportMap values={g.final_layers[g.layer.key] ?? {}} />}
       {!!g.top_by_layer.length && (
@@ -135,7 +186,7 @@ export default function ReportView({ runId }: { runId: string }) {
         <div key={name} className="mt-4"><div className="mb-1 text-[10px] uppercase tracking-wide text-muted">{name.replace(/_/g, ' ')}</div><Table rows={rows} /></div>
       ) : null)}
 
-      <H n={5}>Winners and losers</H>
+      <H n={6}>Winners and losers</H>
       <div className="grid grid-cols-2 gap-6">
         {(['winners', 'losers'] as const).map((side) => (
           <div key={side}><div className="mb-1 text-[10px] uppercase tracking-wide text-muted">{side}</div>
@@ -145,7 +196,7 @@ export default function ReportView({ runId }: { runId: string }) {
         ))}
       </div>
 
-      <H n={6}>Voices</H>
+      <H n={7}>Voices</H>
       <div className="space-y-3">{r.voices.map((v, i) => (
         <blockquote key={i} className="rounded-xl border border-line p-3">
           <p className="text-[14px]">“{v.quote}”</p>
@@ -153,18 +204,19 @@ export default function ReportView({ runId }: { runId: string }) {
         </blockquote>
       ))}</div>
 
-      <H n={7}>Causal chain</H>
+      <H n={8}>Causal chain</H>
       <Causal g={r.causal} />
       <p className="mt-1 text-[10px] text-muted">Dashed arrows are feedback loops.</p>
 
-      <H n={8}>Sensitivities and risks</H>
+      <H n={9}>Sensitivities and risks</H>
       <Tornado rows={r.sensitivities} />
 
-      <H n={9}>Decision points</H>
+      <H n={10}>Decision points</H>
       <p className="mb-2 text-[11px] text-muted">Analysis of what would have changed the simulated outcome. Not a recommendation.</p>
       <ul className="space-y-1.5">{r.decision_points.map((d, i) => <li key={i}><span className="font-medium">{d.action}</span> <span className="text-muted">— when {d.trigger}.</span> {d.effect} <span className="text-[10px] text-muted">({d.basis})</span></li>)}</ul>
+      {r.decisions && <WhoDecided d={r.decisions} />}
 
-      <H n={10}>Confidence and limitations</H>
+      <H n={11}>Confidence and limitations</H>
       <p>Overall: <span className="font-medium">{r.confidence.overall}</span>.</p>
       <ul className="mt-1 list-disc space-y-0.5 pl-5">
         {r.confidence.reasons.map((x, i) => <li key={`r${i}`}>{x}</li>)}
@@ -172,9 +224,14 @@ export default function ReportView({ runId }: { runId: string }) {
         {r.confidence.stale_sources.map((x, i) => <li key={`s${i}`}>Stale source: {x}</li>)}
         <li>Calibration: {r.confidence.calibration}</li>
         {r.confidence.analogs?.map((a, i) => <li key={`a${i}`}>Analog: {a.name}. {a.outcomes} <span className="text-muted">({a.source})</span></li>)}
+        {r.confidence.flags?.map((f, i) => (
+          <li key={`f${i}`}>
+            Flag: {f.text} <span className="text-[10px] text-muted">({f.kind.replace(/_/g, ' ')}{f.generator === 'llm' ? ', AI critic' : ''})</span>
+          </li>
+        ))}
       </ul>
 
-      <H n={11}>Sources and assumptions</H>
+      <H n={12}>Sources and assumptions</H>
       <table className="w-full text-[11px]">
         <thead><tr className="text-left text-[10px] text-muted"><th className="py-1 font-normal">Dataset</th><th className="py-1 font-normal">Source</th><th className="py-1 font-normal">As of</th><th className="py-1 font-normal">License</th></tr></thead>
         <tbody>{r.appendix.datasets.map((d) => <tr key={d.id} className="border-t border-line"><td className="py-1 pr-2">{d.name}</td><td className="py-1 pr-2">{d.source}</td><td className="num py-1 pr-2">{d.as_of ?? 'n/a'}</td><td className="py-1">{d.license}</td></tr>)}</tbody>

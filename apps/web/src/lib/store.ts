@@ -1,5 +1,5 @@
 import { createStore } from './createStore';
-import type { Bubble, Frame, Persona, Report, RunListItem, RunMeta, ScenarioSpec, ServerEvent, SimEvent, Summary, Theme } from './sim/types';
+import type { AgentStep, Bubble, Frame, Persona, Report, RunListItem, RunMeta, ScaleUpdate, ScenarioSpec, ServerEvent, SimEvent, Summary, Theme } from './sim/types';
 import { STATUS_CODES } from './sim/types';
 
 export type RunStatus = 'idle' | 'parsing' | 'awaiting_answer' | 'streaming' | 'done' | 'error';
@@ -36,6 +36,10 @@ export interface WorldsimState {
   bubbles: Bubble[];
   summary: Summary | null;
   report: Report | null;
+  /** plausibility and the scale assessor's forecast, streamed before the measured scale arrives in the report */
+  scale: ScaleUpdate | null;
+  /** agent roles that shaped this run (setup step), latest status per role */
+  agents: AgentStep[];
   playhead: number;
   playing: boolean;
   speed: Speed;
@@ -88,7 +92,7 @@ export interface WorldsimState {
 let msgSeq = 0;
 const initialRun = {
   runId: null, parentRunId: null, spec: null, meta: null, runStatus: 'idle' as RunStatus, progress: null, personas: [], personaIndex: {}, frames: [],
-  statusAt: [], events: [], bubbles: [], summary: null, report: null, playhead: 0, playing: false, selectedPersonaId: null, pendingPrompt: null,
+  statusAt: [], events: [], bubbles: [], summary: null, report: null, scale: null, agents: [], playhead: 0, playing: false, selectedPersonaId: null, pendingPrompt: null,
   zoomRequest: null,
 };
 
@@ -173,6 +177,9 @@ export const useStore = createStore<WorldsimState>((set, get) => ({
       case 'progress': set({ progress: { t: ev.t, total: ev.total, label: ev.label } }); return;
       case 'summary': set({ summary: ev.summary }); return;
       case 'report': set({ report: ev.report }); return;
+      case 'agent': set({ agents: [...s.agents.filter((a) => a.role !== ev.agent.role), ev.agent] }); return;
+      case 'spec': set({ spec: ev.spec, messages: s.messages.map((m) => (m.kind === 'spec' && m.runId === s.runId ? { ...m, spec: ev.spec } : m)) }); return;
+      case 'scale': set({ scale: { plausibility: ev.scale.plausibility ?? s.scale?.plausibility ?? null, hypothesis: ev.scale.hypothesis ?? s.scale?.hypothesis ?? null } }); return;
       case 'done': set({ runStatus: 'done', progress: s.progress ? { ...s.progress, label: 'Simulation complete' } : null }); return;
       case 'error': set({ runStatus: 'error' }); get().addMessage({ role: 'assistant', kind: 'text', text: `Engine error: ${ev.message}` }); return;
     }

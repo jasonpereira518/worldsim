@@ -3,7 +3,7 @@ import { useStore, type LiveFeed } from './store';
 import type { ChatAction, DataCatalogEntry, RunListItem, ScenarioSpec, ServerEvent } from './sim/types';
 
 let es: EventSource | null = null;
-const EVENT_TYPES: ServerEvent['type'][] = ['personas', 'meta', 'frame', 'progress', 'summary', 'report', 'done', 'error'];
+const EVENT_TYPES: ServerEvent['type'][] = ['personas', 'meta', 'agent', 'spec', 'scale', 'frame', 'progress', 'summary', 'report', 'done', 'error'];
 const FOLLOW_UP = /\b(zoom|go to|show me|fly to|look at|focus on|why|explain|how did|when did|what happened|what if|compare|versus|baseline|rerun|re-run|instead|suppose|branch|show only)\b/i;
 
 export const EXAMPLES = [

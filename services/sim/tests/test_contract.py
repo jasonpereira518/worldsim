@@ -8,7 +8,8 @@ import pytest
 from worldsim import models
 
 TS = (Path(__file__).resolve().parents[3] / 'apps' / 'web' / 'src' / 'lib' / 'sim' / 'types.ts').read_text()
-PAIRS = ['Assumption', 'Intervention', 'ScenarioSpec', 'Persona', 'Delta', 'Bubble', 'SimEvent', 'Frame', 'SummaryMetric', 'Summary', 'RunConfig']
+PAIRS = ['Assumption', 'Intervention', 'ScenarioSpec', 'Persona', 'Delta', 'Bubble', 'SimEvent', 'Frame', 'SummaryMetric', 'Summary', 'RunConfig',
+         'Plausibility', 'PriorTail', 'EscalationBranch', 'AnalogBand', 'ScaleHypothesis', 'AgentStep', 'Policy', 'CrowdStance']
 
 
 def ts_fields(name: str) -> dict[str, bool]:

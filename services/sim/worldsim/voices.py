@@ -95,21 +95,28 @@ SCHEMA = {
         'type': 'object', 'additionalProperties': False, 'required': ['id', 'text', 'decision', 'emotion'],
         'properties': {'id': {'type': 'string'}, 'text': {'type': 'string'}, 'decision': {'type': 'string'}, 'emotion': {'type': 'string'}}}}},
 }
-NUM = re.compile(r'\d+(?:[.,]\d+)?')
+NUM = re.compile(r'\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?')
+NUMBER_WORDS = re.compile(r'\b(?:two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|'
+                          r'ninety|hundreds?|thousands?|dozens?|millions|billions|half|third|quarter|twice|triple|double)\b', re.I)
+
+
+def _num(n: str) -> str:
+    return repr(float(n.replace(',', '')))  # '1,200' == '1200' and '1.50' == '1.5'
 
 
 def numbers_ok(text: str, allowed: str) -> bool:
-    """True when every number in `text` also appears in `allowed`."""
-    have = {n.replace(',', '') for n in NUM.findall(allowed)}
-    return all(n.replace(',', '') in have for n in NUM.findall(text))
+    """True when every number in `text` also appears in `allowed`, as digits or words ('twelve', 'thousands', 'half')."""
+    have = {_num(n) for n in NUM.findall(allowed)}
+    words = {w.lower() for w in NUMBER_WORDS.findall(allowed)}
+    return all(_num(n) in have for n in NUM.findall(text)) and all(w.lower() in words for w in NUMBER_WORDS.findall(text))
 
 
 def llm_batch(items: list[dict], budget: llm.Budget | None, step: int, model: str | None = None) -> dict[str, dict]:
-    """items: {id, who, traits, voice, change, numbers}. Returns id → {text, decision, emotion} for valid lines."""
+    """items: {id, who, traits, voice, change, numbers, crowd?}. Returns id → {text, decision, emotion} for valid lines."""
     if not items or not llm.enabled():
         return {}
     user = '\n'.join(f'- id={it["id"]}; who={it["who"]}; voice={it["voice"]}; traits={it["traits"]}; change={it["change"]}; numbers={it["numbers"]}'
-                     for it in items)
+                     + (f'; crowd stance={it["crowd"]}' if it.get('crowd') else '') for it in items)
     out = llm.structured(llm.prompt('persona_reaction'), user, SCHEMA, model=model or llm.FAST_MODEL, budget=budget, step=step, max_tokens=2000)
     res = {}
     for r in (out or {}).get('items', []):

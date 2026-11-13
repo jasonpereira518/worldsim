@@ -13,7 +13,7 @@ import numpy as np
 from . import ENGINE_VERSION, llm, modules, voices
 from .institutions import build_institutions
 from .models import Assumption, Bubble, Delta, Frame, Persona, RunConfig, ScenarioSpec, SimEvent, Summary, SummaryMetric, Why
-from .modules.base import STATUS, Context, Module, Prior, Trajectory
+from .modules.base import STATUS, Context, Module, Prior, Trajectory, behavior_priors, policy_priors, stance_of
 from .parse import find_companies
 from .personas import Population, build_population
 from .util import add_days, fmt
@@ -22,6 +22,7 @@ from .world import World, world
 STATUS_NAMES = list(STATUS)
 ENSEMBLE = int(os.environ.get('WORLDSIM_ENSEMBLE', 24))
 PEOPLE_PER_STEP = 10
+VOICE_CALLS, VOICE_USD = 60, 0.18  # persona voices get their own share of the run budget, so the reporter and critic still run
 STATUS_WEIGHT = np.array([0, 0.6, 1.0, 1.25, 1.1, 1.25, 1.15])
 
 
@@ -47,9 +48,14 @@ class Run:
     report: dict | None = None
     sensitivity: list[dict] = field(default_factory=list)
     counterfactuals: list[dict] = field(default_factory=list)
+    scale: dict | None = None
+    futures: dict = field(default_factory=dict)  # background agent calls (api.py)
+    audit: list = field(default_factory=list)    # agent call records not yet written to runs/<id>.agents.jsonl
+    agent_state: dict = field(default_factory=dict)  # {'setup_done': bool, 'steps': [AgentStep]} from the run file
     budget: llm.Budget = field(default_factory=llm.Budget)
     timings: dict[str, float] = field(default_factory=dict)
     done: threading.Event = field(default_factory=threading.Event)
+    lock: threading.Lock = field(default_factory=threading.Lock)  # one pipeline per run (api.completed)
     error: str | None = None
 
 
@@ -70,17 +76,46 @@ def prepare(config: RunConfig, overrides: dict[str, float] | None = None, w: Wor
         from .world import haversine_km
         i.loc = int(np.argmin(haversine_km(i.lat, i.lon, ctx.loc_lat, ctx.loc_lon)))
     mod = modules.get(spec.module)
-    priors = mod.priors(ctx)
     overrides = dict(overrides or {})
     for a in spec.assumptions:  # user-edited numeric assumptions fix the matching prior
         if a.origin == 'user' and isinstance(a.value, (int, float)):
             overrides.setdefault(a.id, float(a.value))
+    run = Run(config, ctx, mod, derive_priors(ctx, mod, overrides), overrides)
+    run.personas = persona_models(ctx)
+    return run
+
+
+def derive_priors(ctx: Context, mod: Module, overrides: dict[str, float]) -> list[Prior]:
+    """Module priors + actors' policy priors, moved by agent assumptions, then fixed by user overrides. Called again
+    when setup agents change the spec (refresh_priors)."""
+    ctx._policy_scope = None
+    # actors' thresholds, lags and durations, then crowd behavior multipliers: appended, so module draws are unchanged
+    priors = mod.priors(ctx) + policy_priors(ctx, mod.policy_menu) + behavior_priors(ctx, mod.behavior_dims)
+    apply_llm_assumptions(priors, ctx.spec, overrides)
     for p in priors:
         if p.key in overrides:
             p.value = p.low = p.high = overrides[p.key]
-    run = Run(config, ctx, mod, priors, overrides)
-    run.personas = persona_models(ctx)
-    return run
+    return priors
+
+
+def refresh_priors(run: Run) -> None:
+    run.priors = derive_priors(run.ctx, run.module, run.overrides)
+
+
+def apply_llm_assumptions(priors: list[Prior], spec: ScenarioSpec, overrides: dict[str, float]) -> None:
+    """Agent-set values (origin 'llm') move a prior inside its code-defined range: they may narrow it, never widen it,
+    and a user override of the same key wins. The prior keeps its confidence; its origin and source become the agent's."""
+    agent = {a.id: a for a in spec.assumptions if a.origin == 'llm' and isinstance(a.value, (int, float))}
+    for p in priors:
+        a = agent.get(p.key)
+        if a is None or p.key in overrides:
+            continue
+        lo = max(p.low, a.low) if a.low is not None else p.low
+        hi = min(p.high, a.high) if a.high is not None else p.high
+        if lo > hi:
+            continue
+        p.value, p.low, p.high = min(max(float(a.value), lo), hi), lo, hi
+        p.origin, p.source = 'llm', a.source
 
 
 def persona_models(ctx: Context) -> list[Persona]:
@@ -130,6 +165,22 @@ def run_ensemble(run: Run, n: int = ENSEMBLE, progress=None) -> None:
     assert abs(run.traj.key[-1] - run.ensemble[run.median].key[-1]) < 1e-6 * max(1, abs(run.traj.key[-1])), 'detail run diverged from its ensemble member'
 
 
+def quick_look(run: Run, n: int) -> dict:
+    """The first n ensemble members (same seeds as the full ensemble, so paired with it) for the actors' re-plan:
+    headline outcome and, per policy, in how many runs it fired and when."""
+    seed, (key, name, unit) = run.config.seed, run.module.outcome_spec[0]
+    vals, fired = [], {p.id: [] for p in run.config.spec.policies}
+    for i in range(n):
+        params = central(run.priors) if i == 0 else sample_params(run.priors, np.random.default_rng([seed, i]))
+        tr = run.module.simulate(run.ctx, params, np.random.default_rng([seed, i, 1]), detail=False)
+        vals.append(float(tr.outcomes.get(key, np.nan)))
+        for pid in {d['policy'] for d in tr.decisions}:
+            fired.setdefault(pid, []).append(min(d['day'] for d in tr.decisions if d['policy'] == pid))
+    p5, p50, p95 = np.nanpercentile(vals, [5, 50, 95])
+    return {'n': n, 'outcome': {'name': name, 'unit': unit, 'p5': float(p5), 'p50': float(p50), 'p95': float(p95)},
+            'fired': {pid: {'runs': len(days), 'median_day': float(np.median(days)) if days else None} for pid, days in fired.items()}}
+
+
 def bands(run: Run) -> np.ndarray:
     keys = np.stack([tr.key for tr in run.ensemble])
     return np.percentile(keys, [5, 25, 50, 75, 95], axis=0)
@@ -148,6 +199,7 @@ def frames(run: Run):
     partner = getattr(ctx, 'partner_name', '')
     mname, munit = mod.persona_metric
     spoken = np.zeros(ctx.P, np.float32)  # metric value at the persona's last bubble
+    vb = run.budget.child(VOICE_USD, VOICE_CALLS)
     for t in range(ctx.steps + 1):
         date = add_days(spec.start_date, t * ctx.dt)
         ps, pm = tr.p_status[t], tr.p_metric[t]
@@ -198,13 +250,17 @@ def frames(run: Run):
                 why = Why(event=f'{old} → {new}', metric=wname, before=round(before, 3), after=round(after, 3), unit=wunit)
                 payload[pid] = (text, why, prio, new)
                 items.append({'id': pid, 'who': per.label, 'voice': per.voice, 'traits': per.traits, 'change': f'{old} → {new}',
+                              'crowd': stance_of(ctx, int(ctx.p_c[k])) if kind == 'people' and spec.behavior else None,
                               'numbers': f'{mname} {before:.3g} → {after:.3g} {munit}; ' + ', '.join(f'{k}={v}' for k, v in tctx.items() if k in ('price', 'price_share', 'm'))})
-            llm_lines = {}
-            if llm.enabled():
-                inst_ids = {ctx.institutions[k].id for k, kind in picks if kind == 'institution'}
-                # routine reactions on the fast model; key actors (institutions) on the main model
-                llm_lines.update(voices.llm_batch([i for i in items if i['id'] not in inst_ids][:8], run.budget, t))
-                llm_lines.update(voices.llm_batch([i for i in items if i['id'] in inst_ids][:4], run.budget, t, model=llm.MAIN_MODEL))
+            llm_lines = run.agent_state.get('voices', {}).get(str(t))  # lines from the first stream, so a replay makes no calls
+            if llm_lines is None:
+                llm_lines = {}
+                if llm.enabled():
+                    inst_ids = {ctx.institutions[k].id for k, kind in picks if kind == 'institution'}
+                    # routine reactions on the fast model; key actors (institutions) on the mid-tier model
+                    llm_lines.update(voices.llm_batch([i for i in items if i['id'] not in inst_ids][:8], vb, t))
+                    llm_lines.update(voices.llm_batch([i for i in items if i['id'] in inst_ids][:4], vb, t, model=llm.MID_MODEL))
+                    run.agent_state.setdefault('voices', {})[str(t)] = llm_lines
             said = set()
             for pid, (text, why, prio, new) in payload.items():
                 l = llm_lines.get(pid)
@@ -285,7 +341,8 @@ LOW_PRIOR_LIMIT = 12
 
 def confidence(run: Run) -> str:
     """One rule for every output: low without data, in generic mode, or when many low-confidence priors drive the run."""
-    lows = [p for p in run.priors if p.confidence == 'low' and p.high > p.low]
+    # actor-policy priors are decisions, not unknowns about the world: they do not count toward the low-confidence limit
+    lows = [p for p in run.priors if p.confidence == 'low' and p.high > p.low and not p.key.startswith('pol_')]
     if not run.ctx.world.available or run.module.name == 'generic' or len(lows) > LOW_PRIOR_LIMIT:
         return 'low'
     return run.module.confidence
@@ -300,8 +357,10 @@ def execute(run: Run, progress=None) -> None:
 
 def finish(run: Run) -> None:
     from .report import build_report
+    from .scale import assess
     sensitivity(run)
     counterfactuals(run)
+    run.scale = assess(run)
     run.summary = summary(run)
     run.report = build_report(run)
     run.done.set()

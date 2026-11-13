@@ -13,7 +13,7 @@ import numpy as np
 from .. import T0
 from ..geo import EU27
 from ..personas import share_above
-from .base import STATUS, TRAITS, Context, Module, Prior, Trajectory, monotone
+from .base import STATUS, TRAITS, Context, Module, Prior, Trajectory, behavior, monotone
 
 BASS_SRC = 'Sultan, Farley & Lehmann (1990), meta-analysis of 213 Bass applications: mean p ≈ 0.03, q ≈ 0.38 per year'
 ADOPTED_SHARE = 0.03  # status 'adopted' once 3% of the segment's market potential has bought (model threshold)
@@ -38,6 +38,8 @@ class Launch(Module):
                     ('foundry_revenue_busd', 'Foundry revenue from the device', 'USD billion'), ('addressable_m', 'Addressable buyers', 'million people')]
     mechanisms = ['media awareness', 'availability waves and regulatory delay', 'income-based affordability', 'Bass contagion',
                   'supply capacity and backlog', 'competitor price response', 'supplier revenue']
+
+    behavior_dims = {'adoption_willingness': 'willingness to buy a new device category once aware'}
 
     def priors(self, ctx: Context) -> list[Prior]:
         price = next((a.value for a in ctx.spec.assumptions if a.id == 'price_usd'), None)
@@ -105,6 +107,7 @@ class Launch(Module):
         B = np.zeros(ctx.P)        # backlog (ordered, not delivered)
         cut_t = None
         noise_q = p['bass_q'] * rng.lognormal(0, 0.1, ctx.C)  # country-level contagion noise
+        adopt_m = behavior(ctx, p, 'adoption_willingness')[ctx.p_c]  # crowd stances; 1 without
         m_c = np.bincount(ctx.p_c, weights=m, minlength=ctx.C)
         key = np.zeros(T + 1)
         metrics, layers, flows, events = [], [], [], []
@@ -128,7 +131,7 @@ class Launch(Module):
             orders = np.zeros(ctx.P)
             if t > 0:
                 F_c = np.bincount(ctx.p_c, weights=N + B, minlength=ctx.C) / np.maximum(m_c, 1)
-                h = 1 - np.exp(-(p['bass_p'] + noise_q[ctx.p_c] * F_c[ctx.p_c]) * (dt_w / 52))
+                h = np.minimum((1 - np.exp(-(p['bass_p'] + noise_q[ctx.p_c] * F_c[ctx.p_c]) * (dt_w / 52))) * adopt_m, 1.0)
                 if cut_t is not None:
                     h = np.where(ps > 0.5, h * (1 - p['competitor_effect']), h)
                 orders = np.maximum(m - N - B, 0) * h * A * open_c[ctx.p_c]
@@ -235,7 +238,7 @@ class Launch(Module):
                'competitor_cut_week': float(cut_t * dt_w) if cut_t is not None else float('nan'),
                'assembler_revenue_busd': revenue * p['bom_assembly'] / 1e9, 'foundry_revenue_busd': revenue * p['bom_chips'] / 1e9,
                'addressable_m': float(addressable.sum() / 1e6)}
-        traj = Trajectory(key=key, metrics=metrics, outcomes=out)
+        traj = Trajectory(key=key, metrics=metrics, outcomes=out, affected_loc=np.bincount(ctx.p_loc, weights=N, minlength=ctx.L))  # adopters
         if detail:
             traj.p_status, traj.p_metric, traj.i_status, traj.i_metric = p_status, p_metric, i_status, i_metric
             traj.layers, traj.flows, traj.events = layers, flows, events

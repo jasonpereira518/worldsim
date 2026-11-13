@@ -11,7 +11,7 @@ import math
 import numpy as np
 
 from ..world import haversine_km
-from .base import STATUS, TRAITS, Context, Module, Prior, Trajectory, monotone
+from .base import STATUS, TRAITS, Context, Module, Prior, Trajectory, fire_policies, monotone
 
 PAGER = 'Jaiswal & Wald (2010), USGS PAGER empirical fatality model: rate = Φ(ln(MMI/θ)/β); θ approximated from GDP per capita here'
 BATH = 'Båth (1965): largest aftershock ≈ mainshock magnitude − 1.2'
@@ -85,6 +85,11 @@ class Earthquake(Module):
     calibration_note = ('Backtested on six earthquakes (Izmit 1999, Kahramanmaraş 2023, Gorkha 2015, Haiti 2010, Kumamoto 2016, Wenchuan 2008): '
                         'central-run deaths within a factor of 4 of the record for five; Gorkha is overpredicted about 30× (Kathmandu shook less than '
                         'its rupture distance implies). Geometric-mean bias about 1.25×. Expect order-of-magnitude, not exact, tolls. tests/test_backtests.py')
+    policy_menu = {
+        'aid': {'kind': 'aid', 'label': 'international relief deployment', 'metric': 'deaths_reported', 'metric_label': 'reported deaths', 'level': 'global',
+                'threshold': (100.0, 10.0, 10000.0, 'deaths'), 'lag': (2.0, 1.0, 10.0), 'scope': 'all',
+                'source': 'UN INSARAG urban search-and-rescue and relief deployment timelines (analyst prior)'},
+    }
 
     def priors(self, ctx: Context) -> list[Prior]:
         mag = next((a.value for a in ctx.spec.assumptions if a.id == 'magnitude'), None)
@@ -158,6 +163,8 @@ class Earthquake(Module):
         gdp_origin = float(ctx.c_pop[o_c] * g[oi])
         total_deaths = float(deaths_loc.sum() + deaths_as.sum())
         aid_mult = 2.0 if any(iv.kind == 'aid' for iv in ctx.spec.interventions) else 1.0
+        aid_start = 0.0 if aid_mult > 1 else None  # day relief doubles shelter speed: day 0 for a stated aid surge, later when an actor decides
+        ivs, fired, decisions = list(ctx.spec.interventions), {}, []
         key = np.zeros(T + 1)
         metrics, layers, flows, events = [], [], [], []
         p_status = np.zeros((T + 1, ctx.P), np.int8) if detail else None
@@ -180,7 +187,10 @@ class Earthquake(Module):
                     reported += deaths_as.sum() * (1 - math.exp(-(day - as_day + 1) / p['report_days']))
             frac = min(1.0, max(day, 1) / 3) if day < 3 else math.exp(-(day - 3) / p['return_days'])
             disp = displaced_max * frac
-            shelter = displaced_max.sum() * (1 - math.exp(-day * aid_mult / p['aid_days']))
+            for iv in ivs:
+                if iv.kind == 'aid' and iv.day == t and aid_start is None:
+                    aid_start = float(day)
+            shelter = displaced_max.sum() * (1 - math.exp(-(day + (max(0.0, day - aid_start) if aid_start is not None else 0.0)) / p['aid_days']))
             gap = max(0.0, float(disp.sum() - shelter))
             shelter_gap_peak = max(shelter_gap_peak, gap)
             disp_peak = max(disp_peak, float(disp.sum()))
@@ -189,6 +199,8 @@ class Earthquake(Module):
             if math.isnan(restore_day) and day > 0 and out_pop <= 0.1 * out_total0:
                 restore_day = float(day)
             key[t] = reported
+            if ctx.spec.policies:
+                fire_policies(ctx, self.policy_menu, p, t, {'deaths_reported': float(reported)}, fired, ivs, decisions, events if detail else None)
             metrics.append({'deaths_reported': round(float(reported)), 'displaced_now': round(float(disp.sum())), 'without_shelter': round(gap),
                             'without_power_water': round(out_pop)})
             if not detail:
@@ -255,7 +267,8 @@ class Earthquake(Module):
             flows.append(fl)
         out = {'deaths': total_deaths, 'injured': total_deaths * p['injury_ratio'], 'displaced_peak': disp_peak, 'exposed_mmi7': exposed7,
                'loss_busd': loss / 1e9, 'loss_pct_gdp': loss / max(gdp_origin, 1) * 100, 'restore_days': restore_day, 'shelter_gap_peak': shelter_gap_peak}
-        traj = Trajectory(key=key, metrics=metrics, outcomes=out)
+        # people exposed to damaging shaking (MMI ≥ 7, mainshock or aftershock)
+        traj = Trajectory(key=key, metrics=metrics, outcomes=out, affected_loc=agg(w * (mmi_as_r >= 7).mean(1)), decisions=decisions)
         if detail:
             traj.p_status, traj.p_metric, traj.i_status, traj.i_metric = p_status, p_metric, i_status, i_metric
             traj.layers, traj.flows, traj.events = layers, flows, events

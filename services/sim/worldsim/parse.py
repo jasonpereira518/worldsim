@@ -1,12 +1,13 @@
-"""Prompt → ScenarioSpec. Rules always run; the LLM (when enabled) refines classification, place and actors
-inside the same schema. Numbers in the spec come only from the prompt text or from module defaults."""
+"""Prompt → ScenarioSpec. Rules always run; the intake agent (when enabled) refines classification, place and actors
+and judges plausibility. Numbers in the spec come only from the prompt text or from module defaults."""
 from __future__ import annotations
 
 import datetime as dt
 import re
 
 from . import T0, llm
-from .models import Assumption, Intervention, Place, ScenarioSpec
+from .agents import intake
+from .models import Assumption, Intervention, Place, Plausibility, ScenarioSpec
 from .world import World
 
 RULES: list[tuple[str, str, list[str], int, int, list[str], list[str]]] = [
@@ -158,23 +159,21 @@ def parse_interventions(text: str) -> list[Intervention]:
     return out
 
 
-LLM_SCHEMA = {
-    'type': 'object', 'additionalProperties': False,
-    'required': ['event_type', 'origin_place', 'is_global', 'needs_clarification', 'clarifying_question', 'actors', 'mechanisms', 'title'],
-    'properties': {
-        'event_type': {'type': 'string', 'enum': [r[0] for r in RULES] + ['generic']},
-        'origin_place': {'type': ['string', 'null']},
-        'is_global': {'type': 'boolean'},
-        'needs_clarification': {'type': 'boolean'},
-        'clarifying_question': {'type': ['string', 'null']},
-        'actors': {'type': 'array', 'items': {'type': 'string'}},
-        'mechanisms': {'type': 'array', 'items': {'type': 'string'}},
-        'title': {'type': 'string'},
-    },
-}
+def rules_plausibility(assumptions: list[Assumption], text: str = '') -> Plausibility | None:
+    """Hard physical limits checked without an LLM. None means no rule applies (the premise is not judged)."""
+    mag = next((a.value for a in assumptions if a.id == 'magnitude'), None)
+    if isinstance(mag, (int, float)):
+        if mag > 9.6:
+            fixed = re.sub(r'(magnitude\s?)\d{1,2}(?:\.\d)?', r'\g<1>9.0', text, flags=re.I) if text else None
+            return Plausibility(verdict='impossible', reasons=['No earthquake above magnitude 9.5 has been recorded (Valdivia 1960, USGS); '
+                                                               'fault lengths on Earth cap moment magnitude near that size.'],
+                                adjusted_premise=fixed if fixed and fixed != text else None)
+        if mag >= 9.0:
+            return Plausibility(verdict='stretched', reasons=['Only a handful of magnitude 9 or larger earthquakes have been recorded since 1900 (USGS), all on subduction zones.'])
+    return None
 
 
-def parse_prompt(prompt: str, w: World, answers: dict | None = None, budget: llm.Budget | None = None) -> ScenarioSpec:
+def parse_prompt(prompt: str, w: World, answers: dict | None = None, budget: llm.Budget | None = None, audit: list | None = None) -> ScenarioSpec:
     text = prompt.strip()
     lower = text.lower()
     rule = next((r for r in RULES if re.search(r[1], lower)), GENERIC)
@@ -185,8 +184,9 @@ def parse_prompt(prompt: str, w: World, answers: dict | None = None, budget: llm
     mechanisms = list(rule[5])
     clarify = None
     title = text[0].upper() + text[1:] if text else text
+    plausibility = None
 
-    out = llm.structured(llm.prompt('parse_scenario').replace('{t0}', T0), text, LLM_SCHEMA, budget=budget)
+    out = intake(text, w, budget, audit)
     if out:
         parser = 'llm'
         etype = out['event_type']
@@ -198,6 +198,7 @@ def parse_prompt(prompt: str, w: World, answers: dict | None = None, budget: llm
         if out.get('needs_clarification') and not place:
             clarify = out.get('clarifying_question')
         title = out.get('title') or title
+        plausibility = out['plausibility']
 
     companies = find_companies(text, w)
     hq = None
@@ -224,7 +225,7 @@ def parse_prompt(prompt: str, w: World, answers: dict | None = None, budget: llm
     if pct and etype in ('policy', 'supply_chain'):
         assumptions.append(Assumption(id='tariff_pct', text=f'Tariff rate {pct[1]}%', value=float(pct[1]), unit='%',
                                       origin='user', confidence='high', editable=True))
-    mag = re.search(r'magnitude\s?(\d(?:\.\d)?)|\bm\s?(\d\.\d)\b', lower)
+    mag = re.search(r'magnitude\s?(\d{1,2}(?:\.\d)?)|\bm\s?(\d\.\d)\b', lower)
     if mag:
         assumptions.append(Assumption(id='magnitude', text=f'Magnitude {mag[1] or mag[2]}', value=float(mag[1] or mag[2]),
                                       origin='user', confidence='high', editable=True))
@@ -242,10 +243,16 @@ def parse_prompt(prompt: str, w: World, answers: dict | None = None, budget: llm
                                       origin='user' if parse_start_date(text) != T0 else 'model', confidence='high' if parse_start_date(text) != T0 else 'medium'))
     if etype == 'disaster' and not re.search(r'quake|magnitude|tsunami', lower):
         module = 'generic'  # hydro-meteorological hazards use the generic module until their hazard models land
+    hard = rules_plausibility(assumptions, text)
+    if hard and (hard.verdict == 'impossible' or plausibility is None):
+        plausibility = hard  # physical limits outrank the intake agent's judgment
+    if plausibility and plausibility.verdict == 'impossible':
+        clarify = f'This premise looks impossible: {plausibility.reasons[0] if plausibility.reasons else "it breaks a physical limit"}' + \
+                  (f' Try: "{plausibility.adjusted_premise}"' if plausibility.adjusted_premise else ' Please rephrase it.')
     return ScenarioSpec(
         title=title[:90], prompt=text, event_type=etype, domains=rule[2], origin=origin, **{'global': is_global},
         start_date=parse_start_date(text), horizon_days=rule[3], step_days=rule[4],
         actors=list(dict.fromkeys(company_names + actors_extra + ([origin.country] if origin and origin.country else []) + rule[6])),
         mechanisms=mechanisms, assumptions=assumptions, interventions=parse_interventions(text), clarifying_question=clarify,
-        engine='worldsim', module=module, parser=parser, confidence='low' if module == 'generic' else 'medium',
+        engine='worldsim', module=module, parser=parser, confidence='low' if module == 'generic' else 'medium', plausibility=plausibility,
     )

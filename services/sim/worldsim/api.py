@@ -2,21 +2,24 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 import time
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import T0, ENGINE_VERSION, llm
+from . import T0, ENGINE_VERSION, agents, llm
 from .chat import handle_chat
 from .engine import ENSEMBLE, Run, bands, finish, frames, make_config, prepare
-from .models import Intervention, RunConfig, ScenarioSpec
+from .models import AgentStep, Intervention, RunConfig, ScenarioSpec
 from .parse import parse_prompt
+from .scale import calibration_record
 from .util import fnv1a
 from .world import world
 
@@ -25,6 +28,14 @@ RUNS_DIR = Path(os.environ.get('WORLDSIM_RUNS', Path(__file__).resolve().parents
 CACHE: OrderedDict[str, Run] = OrderedDict()
 LOCK = threading.Lock()
 FRAME_DELAY = float(os.environ.get('WORLDSIM_FRAME_DELAY', 0.02))
+POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix='agents')  # agent calls that run beside the stream
+AGENT_WAIT_S = float(os.environ.get('WORLDSIM_AGENT_WAIT_S', 90))   # how long finish() waits for the scale assessor
+SETUP_CAP_S = float(os.environ.get('WORLDSIM_SETUP_CAP_S', 45))     # setup roles get this long before the ensemble starts
+REPLAN_N = int(os.environ.get('WORLDSIM_REPLAN_ENSEMBLE', 8))       # members in the actors' first look
+
+
+def audit_path(run_id: str) -> Path:
+    return RUNS_DIR / f'{run_id}.agents.jsonl'
 
 
 class CreateRun(BaseModel):
@@ -38,9 +49,18 @@ class CreateRun(BaseModel):
     label: str | None = Field(default=None, max_length=80)
 
 
-def save_config(cfg: RunConfig, overrides: dict) -> None:
+def save_config(cfg: RunConfig, overrides: dict, agent_state: dict | None = None) -> None:
+    """Run file: {config, overrides, agents}. `agents` ({setup_done, steps}) is kept when not given."""
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
-    (RUNS_DIR / f'{cfg.run_id}.json').write_text(json.dumps({'config': cfg.model_dump(by_alias=True), 'overrides': overrides}, indent=1))
+    f = RUNS_DIR / f'{cfg.run_id}.json'
+    if agent_state is None:
+        agent_state = json.loads(f.read_text()).get('agents', {}) if f.exists() else {}
+    f.write_text(json.dumps({'config': cfg.model_dump(by_alias=True), 'overrides': overrides, 'agents': agent_state}, indent=1))
+
+
+def load_agents(run_id: str) -> dict:
+    f = RUNS_DIR / f'{run_id}.json'
+    return json.loads(f.read_text()).get('agents', {}) if f.exists() else {}
 
 
 def load_config(run_id: str) -> tuple[RunConfig, dict]:
@@ -58,6 +78,7 @@ def get_run(run_id: str) -> Run:
             return CACHE[run_id]
     cfg, overrides = load_config(run_id)
     run = prepare(cfg, overrides)
+    run.agent_state = load_agents(run_id)
     with LOCK:
         CACHE[run_id] = run
         while len(CACHE) > 12:
@@ -68,6 +89,7 @@ def get_run(run_id: str) -> Run:
 def create(body: CreateRun) -> RunConfig:
     w = world()
     overrides = dict(body.assumptions or {})
+    audit: list[dict] = []
     if body.parent_run_id:
         parent, parent_over = load_config(body.parent_run_id)
         spec = parent.spec.model_copy(deep=True)
@@ -87,7 +109,7 @@ def create(body: CreateRun) -> RunConfig:
         seed = parent.seed if body.seed is None else body.seed
         label = body.label or body.prompt[:80]
     else:
-        spec = parse_prompt(body.prompt, w, body.answers)
+        spec = parse_prompt(body.prompt, w, body.answers, budget=llm.Budget(), audit=audit)
         seed = body.seed if body.seed is not None else fnv1a(body.prompt + json.dumps(body.answers or {}, sort_keys=True))
         label = body.label
     if overrides.get('horizon_days'):
@@ -97,8 +119,100 @@ def create(body: CreateRun) -> RunConfig:
             a.value, a.origin, a.confidence = overrides[a.id], 'user', 'high'
     run_id = f'run_{int(time.time() * 1000):x}_{seed % 46656:x}'
     cfg = make_config(spec, seed, run_id, w.snapshot_id, body.parent_run_id, body.branch_at, label)
-    save_config(cfg, overrides)
+    # a branch inherits its parent's agent decisions through the copied spec, so it never re-runs setup
+    save_config(cfg, overrides, {'setup_done': True, 'inherited_from': body.parent_run_id, 'steps': []} if body.parent_run_id else {})
+    agents.write_audit(audit_path(run_id), audit)
     return cfg
+
+
+def setup_events(run: Run):
+    """Setup step before the ensemble: agent roles run in parallel, each bounded in time and cost; their decisions are
+    applied to the spec on this thread, saved, and the priors re-derived. Yields SSE strings."""
+    from concurrent.futures import FIRST_COMPLETED, wait
+    from .engine import refresh_priors
+    spec, state = run.config.spec, run.agent_state
+    for st in state.get('steps', []):  # replay: show the roster as it was
+        yield sse('agent', {'agent': st})
+    if run.ensemble or state.get('setup_done') or not llm.enabled():
+        return
+    with LOCK:
+        futs = run.futures.get('setup')
+        if futs is None:
+            futs = run.futures['setup'] = {r: POOL.submit(agents.run_setup, r, run, run.budget) for r in agents.setup_roles(run)}
+    for r in futs:
+        yield sse('agent', {'agent': AgentStep(role=r, model=agents.ROLES[r]['model'], status='running', summary=agents.RUNNING.get(r, 'Working')).model_dump()})
+    pending, steps, applies, t0 = dict(futs), [], [], time.monotonic()
+    while pending:
+        done, _ = wait(list(pending.values()), timeout=2, return_when=FIRST_COMPLETED)
+        for r in [r for r, f in pending.items() if f in done]:
+            step, apply = pending.pop(r).result()
+            steps.append(step.model_dump())
+            if apply:
+                applies.append(apply)
+            yield sse('agent', {'agent': step.model_dump()})
+        if pending and time.monotonic() - t0 > SETUP_CAP_S:
+            for r in pending:  # still running: its answer is ignored and the module defaults stand
+                step = AgentStep(role=r, model=agents.ROLES[r]['model'], status='failed', summary=f'No answer within {SETUP_CAP_S:.0f} s; the module defaults stand.')
+                steps.append(step.model_dump())
+                yield sse('agent', {'agent': step.model_dump()})
+            break
+        if pending:
+            yield sse('progress', {'t': 0, 'total': run.ctx.steps, 'label': f'Agents working: {", ".join(pending)}'})
+    for apply in applies:
+        apply(spec)
+    refresh_priors(run)  # agent values move priors; actor policies add their own
+    run.agent_state = {'setup_done': True, 'steps': steps}
+    save_config(run.config, run.overrides, run.agent_state)
+    agents.write_audit(audit_path(run.config.run_id), run.audit)
+    run.audit.clear()
+    yield sse('spec', {'spec': spec.model_dump(by_alias=True)})
+
+
+def replan_events(run: Run):
+    """The actors' one re-plan round: a first look over REPLAN_N members (paired with the full ensemble), one revision,
+    priors re-derived. The first plan and its look stay in the run file for the report's adaptation effect."""
+    from concurrent.futures import TimeoutError as Timeout
+    from .engine import quick_look, refresh_priors
+    state, spec = run.agent_state, run.config.spec
+    if run.ensemble or 'replan' in state or state.get('inherited_from') or not spec.policies or not llm.enabled():
+        return
+    yield sse('progress', {'t': 0, 'total': run.ctx.steps, 'label': f'First look: {REPLAN_N} runs for the actors'})
+    look, first = quick_look(run, REPLAN_N), agents.current_plan(run)
+    model = agents.ROLES['replan']['model']
+    yield sse('agent', {'agent': AgentStep(role='replan', model=model, status='running', summary=agents.RUNNING['replan']).model_dump()})
+    with LOCK:
+        fut = run.futures.get('replan') or run.futures.setdefault('replan', POOL.submit(agents.run_setup, 'replan', run, run.budget, look=look))
+    try:
+        step, apply = fut.result(timeout=SETUP_CAP_S)
+    except Timeout:
+        step, apply = AgentStep(role='replan', model=model, status='failed', summary=f'No answer within {SETUP_CAP_S:.0f} s; the first plan stands.'), None
+    if apply:
+        apply(spec)
+        refresh_priors(run)
+    state['replan'] = {'first_plan': first, 'first_look': look, 'revised': any(p.revised for p in spec.policies) if apply else False}
+    state.setdefault('steps', []).append(step.model_dump())
+    save_config(run.config, run.overrides, state)
+    agents.write_audit(audit_path(run.config.run_id), run.audit)
+    run.audit.clear()
+    yield sse('agent', {'agent': step.model_dump()})
+    if apply:
+        yield sse('spec', {'spec': spec.model_dump(by_alias=True)})
+
+
+def scale_job(run: Run):
+    """Background scale assessor: its forecast is saved into the spec, so a replay or a branch never calls the API again."""
+    audit: list[dict] = []
+    hyp = agents.scale_assessor(run, run.budget, audit)
+    agents.write_audit(audit_path(run.config.run_id), audit)
+    if hyp:
+        run.config.spec.scale = hyp
+        save_config(run.config, run.overrides)
+    return hyp
+
+
+def scale_event(spec: ScenarioSpec) -> str:
+    return sse('scale', {'scale': {'plausibility': spec.plausibility.model_dump() if spec.plausibility else None,
+                                   'hypothesis': spec.scale.model_dump() if spec.scale else None}})
 
 
 @app.get('/health')
@@ -158,6 +272,16 @@ def stream(run_id: str):
                                         'persona_metric': {'name': m.persona_metric[0], 'unit': m.persona_metric[1]},
                                         'layers': [{'key': k, 'label': l, 'unit': u} for k, l, u in m.layers], 'ensemble_size': ENSEMBLE,
                                         'parent_run_id': run.config.parent_run_id, 'label': run.config.label, 'engine': run.config.engine_version}})
+            spec = run.config.spec
+            yield from setup_events(run)  # calibrator (and later actors, crowds) before the scale assessor and ensemble see the priors
+            with LOCK:  # one assessor per run, however many streams are open
+                fut = run.futures.get('scale')
+                if fut is None and llm.enabled() and spec.scale is None and not run.report:
+                    fut = run.futures['scale'] = POOL.submit(scale_job, run)
+            if spec.plausibility or spec.scale:
+                yield scale_event(spec)
+            yield from replan_events(run)  # after the assessor starts, so its call overlaps the first look
+            scale_sent = spec.scale is not None
             if not run.ensemble:
                 n = ENSEMBLE
                 yield sse('progress', {'t': 0, 'total': run.ctx.steps, 'label': f'Running ensemble 0 of {n}'})
@@ -181,17 +305,31 @@ def stream(run_id: str):
                 yield sse('frame', {'frame': clean(f.model_dump(by_alias=True))})
                 if f.t % 5 == 0 or f.t == run.ctx.steps:
                     yield sse('progress', {'t': f.t, 'total': run.ctx.steps, 'label': f'Simulating day {f.t * run.ctx.dt} of {run.ctx.steps * run.ctx.dt}'})
+                if fut and fut.done() and not scale_sent:
+                    scale_sent = True
+                    if fut.result():
+                        yield scale_event(spec)
                 if not replay:
                     time.sleep(FRAME_DELAY)
             if not replay:
                 run.frames = done_frames
+                if fut and not scale_sent:
+                    yield sse('progress', {'t': run.ctx.steps, 'total': run.ctx.steps, 'label': 'Waiting for the scale assessor'})
+                    try:
+                        if fut.result(timeout=AGENT_WAIT_S):
+                            yield scale_event(spec)
+                    except Exception:  # timeout or failure: the measured scale is still reported
+                        logging.getLogger('worldsim.api').warning('scale assessor did not finish for %s', run_id)
                 yield sse('progress', {'t': run.ctx.steps, 'total': run.ctx.steps, 'label': 'Running sensitivity analysis'})
                 finish(run)
+                save_config(run.config, run.overrides, run.agent_state)  # voice lines, report prose and critic flags for replays
+                agents.write_audit(audit_path(run_id), run.audit)
+                run.audit.clear()
+                agents.write_audit(RUNS_DIR / 'calibration.jsonl', [clean(calibration_record(run))])  # forecast vs measurement, for later scoring
             yield sse('summary', {'summary': clean(run.summary.model_dump())})
             yield sse('report', {'report': clean(run.report)})
             yield sse('done', {})
         except Exception as e:  # surfaced to the client; never a silent failure
-            import logging
             logging.exception('run %s failed', run_id)
             yield sse('error', {'message': f'{type(e).__name__}: {e}'})
 
@@ -200,9 +338,10 @@ def stream(run_id: str):
 
 def completed(run_id: str) -> Run:
     run = get_run(run_id)
-    if not run.report:
-        from .engine import execute
-        execute(run)
+    with run.lock:  # concurrent report or chat requests must not run the pipeline (and its agent calls) twice
+        if not run.report:
+            from .engine import execute
+            execute(run)
     return run
 
 

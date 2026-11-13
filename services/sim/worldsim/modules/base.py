@@ -6,6 +6,7 @@ A module turns (context, parameters, rng) into a Trajectory. The engine runs it 
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -44,6 +45,16 @@ class Prior:
             return self.value
         return float(rng.triangular(lo, self.value, hi))
 
+    def quantile(self, q: float) -> float:
+        """Inverse CDF of the same triangular distribution (used to sample a tail for escalation branches)."""
+        a, c, b = min(self.low, self.value), self.value, max(self.high, self.value)
+        if b <= a:
+            return self.value
+        q = min(max(q, 0.0), 1.0)
+        if q < (c - a) / (b - a):
+            return float(a + math.sqrt(q * (b - a) * (c - a)))
+        return float(b - math.sqrt((1 - q) * (b - a) * (b - c)))
+
 
 @dataclass
 class Institution:
@@ -65,6 +76,10 @@ class Trajectory:
     key: np.ndarray                      # key metric per step (global)
     metrics: list[dict[str, float]]      # global metrics per step
     outcomes: dict[str, float]           # end-of-horizon outcome metrics used in the summary table
+    # people materially affected by the end of the horizon, per location (each module's own definition); drives scale.reach_class
+    affected_loc: np.ndarray | None = None
+    # actor policies that fired: {t, day, policy, actor, action, countries, trigger} (both modes; cheap)
+    decisions: list[dict] = field(default_factory=list)
     # detail only
     p_status: np.ndarray | None = None   # (T+1, P) int8 status codes for people personas
     p_metric: np.ndarray | None = None   # (T+1, P) persona-level metric (unit in module.persona_metric)
@@ -177,6 +192,118 @@ def monotone(new: np.ndarray, old: np.ndarray) -> np.ndarray:
     return np.maximum(new, old)
 
 
+# --- actor policies -------------------------------------------------------------------------------------------
+# A module's `policy_menu` lists what actors can decide: {action: {kind, label, metric, metric_label, threshold:
+# (central, low, high, unit), lag: (central, low, high) days, duration?: (central, low, high) days, scope?, source}}.
+# Agents pick actions and scopes; the numbers become priors pol_<id>_threshold / _lag / _duration in the menu's ranges.
+
+def policy_rows(pol, item: dict) -> list[tuple[str, str, float, float, float, str]]:
+    """(key, text, central, low, high, unit) of one policy's priors; the agent's values use the same keys."""
+    c, lo, hi, unit = item['threshold']
+    rows = [(f'pol_{pol.id}_threshold', f'{pol.actor_label}: {item["label"]} when {item["metric_label"]} reaches', c, lo, hi, unit),
+            (f'pol_{pol.id}_lag', f'{pol.actor_label}: days from trigger to {item["label"]}', *item['lag'], 'days')]
+    if 'duration' in item:
+        rows.append((f'pol_{pol.id}_duration', f'{pol.actor_label}: how long the {item["label"]} lasts', *item['duration'], 'days'))
+    return rows
+
+
+def policy_priors(ctx: Context, menu: dict) -> list[Prior]:
+    return [Prior(k, text, c, lo, hi, unit, 'model', 'low', menu[pol.action].get('source'))
+            for pol in ctx.spec.policies if pol.action in menu for k, text, c, lo, hi, unit in policy_rows(pol, menu[pol.action])]
+
+
+def policy_scopes(ctx: Context) -> dict[str, np.ndarray]:
+    """policy id → countries it covers (bool over ctx.iso3). The same for every ensemble member, so cached on ctx."""
+    cached = getattr(ctx, '_policy_scope', None)
+    if cached is None:
+        cached = ctx._policy_scope = {pol.id: scope_mask(ctx, pol.scope) for pol in ctx.spec.policies}
+    return cached
+
+
+def scope_mask(ctx: Context, scope: str) -> np.ndarray:
+    """'all' | 'origin' | 'group:<World Bank income group>' → bool over ctx.iso3."""
+    mask = np.zeros(ctx.C, bool)
+    if scope == 'all':
+        mask[:] = True
+    elif scope == 'origin' and ctx.origin_loc is not None:
+        mask[ctx.loc_c[ctx.origin_loc]] = True
+    elif scope.startswith('group:'):
+        mask = np.array([c in ctx.world.countries and ctx.world.countries[c].income_group == scope[6:] for c in ctx.iso3])
+    return mask
+
+
+def fire_policies(ctx: Context, menu: dict, p: dict, t: int, obs: dict, fired: dict, ivs: list, decisions: list,
+                  events: list | None = None) -> None:
+    """Fire every policy whose trigger crossed at step t: append an Intervention dated t + lag (in steps) to `ivs` and a
+    record to `decisions` (and a timeline event in detail mode). Country metrics fire per country, global metrics once.
+    Deterministic and RNG-free, so a member's detail rerun matches it exactly."""
+    from ..models import Intervention
+    scopes = policy_scopes(ctx)
+    for pol in ctx.spec.policies:
+        item = menu.get(pol.action)
+        if not item or item['metric'] not in obs:
+            continue
+        thr = p[f'pol_{pol.id}_threshold']
+        done = fired.setdefault(pol.id, np.zeros(ctx.C, bool))
+        v = obs[item['metric']]
+        if np.ndim(v) == 0:
+            hit = scopes[pol.id] & ~done if v >= thr else np.zeros(ctx.C, bool)
+        else:
+            hit = scopes[pol.id] & ~done & (v >= thr)
+        if not hit.any():
+            continue
+        first = not done.any()  # the first firing is a key moment; later countries follow at a lower severity
+        done |= hit
+        lag = max(1, int(round(p[f'pol_{pol.id}_lag'] / ctx.dt)))
+        countries = [ctx.iso3[c] for c in np.flatnonzero(hit)]
+        dur = p.get(f'pol_{pol.id}_duration')
+        ivs.append(Intervention(kind=item['kind'], day=t + lag, value=dur, countries=countries, text=f'{pol.actor_label}: {item["label"]}'))
+        where = ', '.join(ctx.c_name[c] for c in np.flatnonzero(hit)[:3]) + (f' and {len(countries) - 3} more' if len(countries) > 3 else '')
+        trigger = f'{item["metric_label"]} reached {thr:.3g} {item["threshold"][3]}'
+        decisions.append({'t': t, 'day': (t + lag) * ctx.dt, 'policy': pol.id, 'actor': pol.actor_label, 'action': item['label'],
+                          'countries': countries, 'trigger': trigger, 'rationale': pol.rationale})
+        if events is not None:
+            events.append({'t': t, 'title': f'{pol.actor_label}: {item["label"]}' + (f' ({where})' if item.get('level') == 'country' else ''),
+                           'cause': f'{trigger}; takes effect in {lag * ctx.dt:.0f} days', 'places': [ctx.c_name[c] for c in np.flatnonzero(hit)[:5]],
+                           'severity': 3 if first else 2})
+
+
+# --- crowd behavior ------------------------------------------------------------------------------------------
+# A module's `behavior_dims` ({dim: description}) are the population behaviors crowd agents may shift. Agents give a
+# label per (cluster, dim); code maps it to a multiplier band, and each non-typical label becomes a prior
+# beh_<cluster>_<dim> in that band, so the ensemble samples it, sensitivity ranks it and a detail run reproduces it.
+STANCE_BANDS = {'much lower': (0.5, 0.75), 'lower': (0.75, 0.95), 'higher': (1.05, 1.35), 'much higher': (1.35, 1.8)}
+
+
+def behavior_key(cluster: str, dim: str) -> str:
+    return 'beh_' + re.sub(r'[^a-z0-9]+', '_', cluster.lower()).strip('_') + '_' + dim
+
+
+def behavior_priors(ctx: Context, dims: dict) -> list[Prior]:
+    return [Prior(behavior_key(st.cluster, dim), f'{st.label}: {dims[dim]} ({label} than typical)', round(sum(STANCE_BANDS[label]) / 2, 4),
+                  *STANCE_BANDS[label], '×', 'llm', 'low', f'crowds (AI): {st.rationale}'.strip())
+            for st in ctx.spec.behavior for dim, label in st.stances.items() if dim in dims and label in STANCE_BANDS]
+
+
+def behavior(ctx: Context, p: dict, dim: str) -> np.ndarray:
+    """Multiplier per country for one behavior dimension: 1 without a stance; the origin cluster overrides its group."""
+    m = np.ones(ctx.C)
+    for st in sorted(ctx.spec.behavior, key=lambda s: s.cluster == 'origin'):
+        k = behavior_key(st.cluster, dim)
+        if k in p:
+            m[scope_mask(ctx, st.cluster)] = p[k]
+    return m
+
+
+def stance_of(ctx: Context, c: int) -> dict[str, str]:
+    """The stance labels that apply to country index c (for voice prompts)."""
+    out = {}
+    for st in sorted(ctx.spec.behavior, key=lambda s: s.cluster == 'origin'):
+        if scope_mask(ctx, st.cluster)[c]:
+            out.update(st.stances)
+    return out
+
+
 class Module:
     name = 'base'
     key_metric = ''
@@ -187,6 +314,8 @@ class Module:
     mechanisms: list[str] = []
     confidence = 'medium'
     explain_keys: list[tuple[str, str]] = [('population', 'population'), ('gdp_per_capita_usd', 'GDP per capita $')]
+    policy_menu: dict[str, dict] = {}  # what actor agents may decide in this module (see fire_policies)
+    behavior_dims: dict[str, str] = {}  # population behaviors crowd agents may shift (see behavior)
 
     def priors(self, ctx: Context) -> list[Prior]:
         raise NotImplementedError

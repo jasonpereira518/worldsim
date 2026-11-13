@@ -1,0 +1,11 @@
+{"id": "izmit1999", "prompt": "A magnitude 7.6 earthquake hits Izmit, Turkey", "analog": "izmit1999"}
+{"id": "kahramanmaras2023", "prompt": "A magnitude 7.8 earthquake hits Kahramanmaras, Turkey", "analog": "kahramanmaras2023"}
+{"id": "gorkha2015", "prompt": "A magnitude 7.8 earthquake hits Kathmandu, Nepal", "analog": "gorkha2015"}
+{"id": "haiti2010", "prompt": "A magnitude 7.0 earthquake hits Port-au-Prince, Haiti", "analog": "haiti2010"}
+{"id": "kumamoto2016", "prompt": "A magnitude 7.0 earthquake hits Kumamoto, Japan", "analog": "kumamoto2016"}
+{"id": "wenchuan2008", "prompt": "A magnitude 7.9 earthquake hits Chengdu, China", "analog": "wenchuan2008"}
+{"id": "h1n1_2009", "prompt": "A novel H1N1 influenza strain with human-to-human transmission emerges in Mexico City", "analog": "h1n1_2009"}
+{"id": "sars2003", "prompt": "A SARS-like coronavirus with human-to-human transmission emerges in Guangzhou", "analog": "sars2003"}
+{"id": "us_tariffs2018", "prompt": "The US imposes a 25% tariff on all imports from China", "analog": "us_tariffs2018"}
+{"id": "visionpro2024", "prompt": "Apple launches a $3,499 mixed-reality headset", "analog": "visionpro2024"}
+{"id": "iphone2007", "prompt": "Apple launches a $499 touchscreen smartphone", "analog": "iphone2007"}

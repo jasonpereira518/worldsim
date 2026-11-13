@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .base import STATUS, TRAITS, Context, Module, Prior, Trajectory, monotone
+from .base import STATUS, TRAITS, Context, Module, Prior, Trajectory, behavior, fire_policies, monotone
 
 R0_SRC = 'Biggerstaff et al. (2014), systematic review of influenza reproduction numbers: pandemic medians ~1.5-1.8; 1918 up to ~2-3'
 FLU_SRC = 'Influenza natural history: latent ~1-2 days, infectious ~4-6 days (CDC, WHO pandemic planning assumptions)'
@@ -31,6 +31,20 @@ class Epidemiology(Module):
     mechanisms = ['human-to-human transmission', 'air-travel seeding', 'health-system capacity', 'behavioral response', 'reporting lag']
     explain_keys = [('hospital_beds_per1000', 'hospital beds per 1,000'), ('physicians_per1000', 'physicians per 1,000'), ('age_65_plus_pct', 'aged 65+ %'),
                     ('urban_pct', 'urban %')]
+    OXCGRT = 'Oxford COVID-19 Government Response Tracker (2020): timing of containment measures relative to local cases'
+    policy_menu = {
+        'lockdown': {'kind': 'lockdown', 'label': 'stay-at-home order', 'metric': 'reported_per_100k', 'metric_label': 'reported cases per 100k',
+                     'level': 'country', 'threshold': (20.0, 1.0, 300.0, 'per 100k'), 'lag': (5.0, 1.0, 21.0), 'duration': (45.0, 14.0, 120.0), 'source': OXCGRT},
+        'border_closure': {'kind': 'border_closure', 'label': 'border closure to international travel', 'metric': 'reported_per_100k',
+                           'metric_label': 'reported cases per 100k', 'level': 'country', 'threshold': (1.0, 0.01, 50.0, 'per 100k'), 'lag': (3.0, 1.0, 14.0),
+                           'source': OXCGRT},
+        'vaccine': {'kind': 'vaccine', 'label': 'emergency vaccine program', 'metric': 'deaths_total', 'metric_label': 'deaths worldwide', 'level': 'global',
+                    'threshold': (1000.0, 10.0, 100000.0, 'deaths'), 'lag': (150.0, 90.0, 300.0), 'scope': 'all',
+                    'source': '2009 H1N1 analog: first doses about six months after detection'},
+    }
+
+    behavior_dims = {'contact_reduction': 'voluntary drop in contacts once deaths become visible',
+                     'compliance': 'compliance with stay-at-home orders'}
 
     def priors(self, ctx: Context) -> list[Prior]:
         return [
@@ -106,7 +120,8 @@ class Epidemiology(Module):
         asc = np.clip(p['ascertainment'] * np.sqrt(phys / 2.0), 0.02, 0.6)
         surge_beds = beds / 1000 * ctx.c_pop * p['surge_bed_share']
         Tm = ctx.travel_matrix(p['travel_rate'])
-        ivs = ctx.spec.interventions
+        ivs = list(ctx.spec.interventions)  # policies append to this run's copy, never to the spec
+        fired, decisions = {}, []
         lag = int(round(p['report_lag']))
         inf_hist = []  # daily new infections by country (for lagged reporting)
         reported_c = np.zeros(C)
@@ -128,6 +143,8 @@ class Epidemiology(Module):
         prev_prev = np.zeros(L)
         vacc_started = False
         border_on, lock_c = False, np.zeros(C, bool)
+        border_c, lock_until = np.zeros(C, bool), np.zeros(C)
+        contact_m, comply_m = behavior(ctx, p, 'contact_reduction'), behavior(ctx, p, 'compliance')  # crowd stances; 1 without
         milestones = set()
         for t in range(T + 1):
             if t > 0:
@@ -135,15 +152,19 @@ class Epidemiology(Module):
                     if iv.day == t:
                         cs = [ctx.c_idx[c] for c in iv.countries if c in ctx.c_idx] or list(range(C))
                         if iv.kind == 'border_closure':
-                            border_on = True
-                        elif iv.kind == 'lockdown':
-                            lock_c[cs] = True
+                            if iv.countries:
+                                border_c[cs] = True
+                            else:
+                                border_on = True
+                        elif iv.kind == 'lockdown':  # value = duration in days (policies); none = until the horizon
+                            lock_until[cs] = np.maximum(lock_until[cs], t + (iv.value / ctx.dt if iv.value else 1e9))
                         if detail:
                             events.append({'t': t, 'title': f'Intervention: {iv.kind.replace("_", " ")}', 'cause': iv.text[:120], 'places': [], 'severity': 3})
+                lock_c = lock_until > t
                 # behavior: contacts fall as deaths become visible (country level)
                 dc = np.bincount(ctx.loc_c, weights=D.sum(1), minlength=C) / np.maximum(ctx.c_pop, 1) * 1e5
-                drop = p['behavior_max'] * (1 - np.exp(-dc / 5.0))
-                drop = np.where(lock_c, np.maximum(drop, 0.5), drop)
+                drop = np.minimum(p['behavior_max'] * contact_m * (1 - np.exp(-dc / 5.0)), 0.9)
+                drop = np.where(lock_c, np.maximum(drop, np.minimum(0.5 * comply_m, 0.9)), drop)
                 beta_eff = beta_c * (1 - drop)
                 prev = I / np.maximum(Ni, 1)
                 mixed = (1 - p['domestic_mixing']) * prev + p['domestic_mixing'] * (G @ prev)
@@ -169,6 +190,8 @@ class Epidemiology(Module):
                 # international importations to each country's hub
                 inf_frac_c = inf_c / np.maximum(ctx.c_pop, 1)
                 travel = Tm * (0.1 if border_on else 1.0)
+                if border_c.any():
+                    travel = travel * np.where(border_c[:, None] | border_c[None, :], 0.1, 1.0)
                 lam_import = inf_frac_c @ travel * ctx.c_pop  # expected infectious arrivals per country
                 arrivals = rng.poisson(lam_import * (1 - drop))
                 hubs = ctx.c_hub
@@ -215,6 +238,9 @@ class Epidemiology(Module):
             if np.isnan(days_to_10) and reached.sum() >= 10:
                 days_to_10 = float(t * ctx.dt)
             over_any |= load > 1
+            if ctx.spec.policies:  # observables only when actors decide, so policy-free runs stay bit-identical
+                obs = {'reported_per_100k': reported_c / np.maximum(ctx.c_pop, 1) * 1e5, 'deaths_total': float(D.sum())}
+                fire_policies(ctx, self.policy_menu, p, t, obs, fired, ivs, decisions, events if detail else None)
             total_D, total_cum, total_rep = D.sum(), cum.sum(), reported_c.sum()
             active = I.sum()
             active_series.append(active)
@@ -286,7 +312,7 @@ class Epidemiology(Module):
                                'activity_drop_pct': {ctx.iso3[c]: round(float(drop[c] * 100), 1) for c in np.flatnonzero(drop > 0.005)}})
         out = {'deaths': float(D.sum()), 'infections': float(cum.sum()), 'reported': float(reported_c.sum()), 'countries': float(reached.sum()),
                'overloaded': float(over_any.sum()), 'days_to_10': days_to_10, 'peak_day': float(np.argmax(active_series) * ctx.dt)}
-        traj = Trajectory(key=key, metrics=metrics, outcomes=out)
+        traj = Trajectory(key=key, metrics=metrics, outcomes=out, affected_loc=cum.sum(1).astype(float), decisions=decisions)  # infected people
         if detail:
             traj.p_status, traj.p_metric, traj.i_status, traj.i_metric = p_status, p_metric, i_status, i_metric
             traj.layers, traj.flows, traj.events = layers, flows, events
