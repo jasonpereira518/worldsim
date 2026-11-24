@@ -268,7 +268,9 @@ class Earthquake(Module):
         out = {'deaths': total_deaths, 'injured': total_deaths * p['injury_ratio'], 'displaced_peak': disp_peak, 'exposed_mmi7': exposed7,
                'loss_busd': loss / 1e9, 'loss_pct_gdp': loss / max(gdp_origin, 1) * 100, 'restore_days': restore_day, 'shelter_gap_peak': shelter_gap_peak}
         # people exposed to damaging shaking (MMI ≥ 7, mainshock or aftershock)
-        traj = Trajectory(key=key, metrics=metrics, outcomes=out, affected_loc=agg(w * (mmi_as_r >= 7).mean(1)), decisions=decisions)
+        aff_e = w * (mmi_as_r >= 7).mean(1)  # per exposure point: a city disc or one province of a "rest of" location
+        traj = Trajectory(key=key, metrics=metrics, outcomes=out, affected_loc=agg(aff_e), decisions=decisions,
+                          affected_places=np.bincount(ex['c'][aff_e >= 100], minlength=C))  # 100 = scale.MIN_PEOPLE
         if detail:
             traj.p_status, traj.p_metric, traj.i_status, traj.i_metric = p_status, p_metric, i_status, i_metric
             traj.layers, traj.flows, traj.events = layers, flows, events

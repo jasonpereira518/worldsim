@@ -20,8 +20,11 @@ CASES = [json.loads(l) for l in (Path(__file__).resolve().parents[1] / 'evals' /
 WITHIN_10X = ('below', 'comparable', 'above')
 # 2026-11-23 baseline on snapshot 2026-10-23: reach 7/11, magnitude 7/10. With the 1:10m gazetteer the Izmit,
 # Kahramanmaras and Kumamoto epicenters are right (before, they fell back to the capital and two reach classes were
-# right by accident). Misses: Kahramanmaras and Kumamoto come out local (recorded multi-country, regional), Gorkha
-# regional (multi-country), the iPhone global (multi-country); novel-pathogen defaults land far above H1N1 and SARS.
+# right by accident). Quakes count affected provinces inside a "Rest of <country>" location (Trajectory.affected_places),
+# so Kahramanmaras is regional, not local. Misses: Kahramanmaras regional and Gorkha regional (recorded multi-country:
+# Aleppo and Bihar sit just outside the MMI ≥ 7 footprint of the simplified isoseismal relation), Kumamoto local (its
+# ~32 km MMI ≥ 7 zone covers one city and one prefecture), the iPhone global (multi-country); novel-pathogen defaults
+# land far above H1N1 and SARS. Widening the footprint would raise the backtested death tolls.
 REACH_FLOOR, BAND_FLOOR = 7, 5
 
 

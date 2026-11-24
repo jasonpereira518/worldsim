@@ -23,8 +23,9 @@ BANDS = [(0.1, 'far below'), (1 / 3, 'below'), (3.0, 'comparable'), (10.0, 'abov
 BRANCH_N = int(os.environ.get('WORLDSIM_BRANCH_ENSEMBLE', 8))
 
 
-def reach_class(ctx, affected_loc) -> tuple[str, int]:
-    """(reach class, countries reached) for one member."""
+def reach_class(ctx, affected_loc, places=None) -> tuple[str, int]:
+    """(reach class, countries reached) for one member. `places`: per country, populated places (cities, provinces) with
+    ≥MIN_PEOPLE affected, from a module that resolves finer than model locations; otherwise locations are counted."""
     if affected_loc is None or not np.isfinite(affected_loc).all() or affected_loc.sum() <= 0:
         return 'local', 0
     aff_c = np.bincount(ctx.loc_c, weights=affected_loc, minlength=ctx.C)
@@ -39,8 +40,8 @@ def reach_class(ctx, affected_loc) -> tuple[str, int]:
     c = int(reached[0]) if n else int(np.argmax(aff_c))
     if aff_c[c] >= NATIONAL_SHARE * ctx.c_pop[c]:
         return 'national', n
-    places = int(((affected_loc >= MIN_PEOPLE) & (ctx.loc_c == c)).sum())
-    return ('regional' if places >= 2 else 'local'), n
+    k = int(places[c]) if places is not None else int(((affected_loc >= MIN_PEOPLE) & (ctx.loc_c == c)).sum())
+    return ('regional' if k >= 2 else 'local'), n
 
 
 def band(ratio: float) -> str:
@@ -102,7 +103,7 @@ def compare_analogs(run, k: int = 8) -> list[dict]:
 def measure(run) -> dict:
     classes, counts = [], []
     for tr in run.ensemble:
-        c, n = reach_class(run.ctx, tr.affected_loc)
+        c, n = reach_class(run.ctx, tr.affected_loc, tr.affected_places)
         classes.append(c)
         counts.append(n)
     dist = _distribution(classes)
@@ -162,7 +163,7 @@ def size_branches(run, branches: list[dict], n: int | None = None) -> list[dict]
                     params[k] = priors[k].quantile(q)
                 tr = run.module.simulate(run.ctx, params, np.random.default_rng([seed, i, 1]), detail=False)  # paired with base member i
                 vals.append(tr.outcomes.get(key, np.nan))
-                classes.append(reach_class(run.ctx, tr.affected_loc)[0])
+                classes.append(reach_class(run.ctx, tr.affected_loc, tr.affected_places)[0])
         finally:
             spec.policies = saved
         size = _pct(vals)

@@ -78,6 +78,9 @@ class Trajectory:
     outcomes: dict[str, float]           # end-of-horizon outcome metrics used in the summary table
     # people materially affected by the end of the horizon, per location (each module's own definition); drives scale.reach_class
     affected_loc: np.ndarray | None = None
+    # per country: populated places (cities, provinces) with ≥100 people affected, for modules that resolve places finer
+    # than model locations (a "Rest of <country>" location holds many provinces); None → scale counts locations
+    affected_places: np.ndarray | None = None
     # actor policies that fired: {t, day, policy, actor, action, countries, trigger} (both modes; cheap)
     decisions: list[dict] = field(default_factory=list)
     # detail only

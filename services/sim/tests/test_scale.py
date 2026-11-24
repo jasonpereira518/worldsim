@@ -38,6 +38,18 @@ def test_reach_classes():
     assert scale.reach_class(ctx, a)[0] == 'local'
 
 
+def test_reach_counts_places_inside_a_residual_location():
+    # A "Rest of <country>" location holds several provinces; a module that resolves them reports places per country,
+    # so damage across provinces is regional even though it lands in one model location.
+    ctx = fake_ctx()
+    a = np.zeros(len(ctx.loc_c))
+    a[0] = 50_000
+    places = np.zeros(ctx.C, int)
+    assert scale.reach_class(ctx, a, places)[0] == 'local'
+    places[0] = 3
+    assert scale.reach_class(ctx, a, places)[0] == 'regional'  # the real-snapshot case is in test_scale_eval (Kumamoto)
+
+
 def test_quantile_matches_triangular():
     p = Prior('x', 'x', 2.0, 1.0, 5.0)
     assert p.quantile(0) == pytest.approx(1.0) and p.quantile(1) == pytest.approx(5.0)
