@@ -197,6 +197,17 @@ CALIBRATION = {'proposals': [
 ]}
 
 
+def test_cached_answer_keeps_its_evidence(llm_on):
+    # a repeated prompt is answered from the disk cache; its tool lookups are replayed so cited values still validate
+    fake = llm_on({'calibrator for Worldsim': [tool_call('list_priors', {}), final(CALIBRATION)]})
+    steps = []
+    for _ in range(2):
+        run = prepare(make_config(parse_prompt('A magnitude 8.1 quake hits Istanbul', world()), 1, 'cal', 'fixture'))
+        steps.append(agents.calibrator(run, llm.Budget(), [])[0])
+    assert fake.by_role['calibrator for Worldsim'] == 2  # tool turn + answer, once: the second run made no calibrator call
+    assert steps[1].summary == steps[0].summary and steps[1].summary.startswith('Set 2 parameters')
+
+
 def test_calibrator_clamps_and_requires_evidence(llm_on):
     llm_on({'calibrator for Worldsim': [tool_call('list_priors', {}), final(CALIBRATION)]})
     from worldsim.engine import apply_llm_assumptions

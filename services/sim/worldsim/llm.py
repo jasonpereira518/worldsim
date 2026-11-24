@@ -146,12 +146,20 @@ def agent(system: str, user: str, schema: dict, tools: list[dict] | None = None,
     defs = sorted(({'name': t['name'], 'description': t['description'], 'input_schema': t['input_schema'], 'strict': True}
                    for t in tools or []), key=lambda d: d['name'])
     key = hashlib.sha256(json.dumps([model, system, user, schema, effort, defs], sort_keys=True).encode()).hexdigest()[:32]
+    fns = {t['name']: t['fn'] for t in tools or []}
     hit = _cache_get(key)
-    if hit is not None:
+    # an answer with tools is cached with its tool calls, replayed on a hit (read-only, local) so the evidence the
+    # answer cites is seen again; an older cache entry without them is treated as a miss
+    if hit is not None and (not fns or (isinstance(hit, dict) and '_tool_calls' in hit)):
+        for name, args in (hit.get('_tool_calls', []) if fns else []):
+            try:
+                fns[name](**args)
+            except Exception:  # the live call reported its error to the model; nothing to restore
+                pass
         if budget:
             budget.cache_hits += 1
-        return hit
-    fns = {t['name']: t['fn'] for t in tools or []}
+        return hit['_out'] if fns else hit
+    calls: list[list] = []
     messages: list[dict] = [{'role': 'user', 'content': user}]
     for turn in range(max_turns):
         if budget and not budget.allow(step):
@@ -177,6 +185,7 @@ def agent(system: str, user: str, schema: dict, tools: list[dict] | None = None,
             messages.append({'role': 'assistant', 'content': resp.content})
             results = []
             for b in uses:
+                calls.append([b.name, b.input])
                 try:
                     out = json.dumps(fns[b.name](**b.input), sort_keys=True, default=str)
                     results.append({'type': 'tool_result', 'tool_use_id': b.id, 'content': out})
@@ -190,7 +199,7 @@ def agent(system: str, user: str, schema: dict, tools: list[dict] | None = None,
         except json.JSONDecodeError:
             out = None
         if out is not None:
-            _cache_put(key, out)
+            _cache_put(key, {'_out': out, '_tool_calls': calls} if fns else out)
         return out
     return None
 
