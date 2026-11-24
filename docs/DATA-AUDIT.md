@@ -107,7 +107,9 @@ Three quarters of the model priors are guesses. Most carry wide ranges and low c
 | Scale thresholds (100 people, 0.01%, 25%, 25 countries on 3 continents) | Guess | Definitions, not estimates; they should be labeled as conventions |
 | Generic `CLASS` table | Guess | As above |
 
-LLM-set values (origin `llm`, the calibrator, actor and crowd agents) are bounded by the ranges above and cite evidence ids from the datasets above. They inherit the tier of the prior they move and are never verified on their own.
+LLM-set values (origin `llm`, the calibrator, actor and crowd agents) are bounded by the ranges above and cite evidence ids from the datasets above. The range they move within keeps its tier, but the value an agent picks is labeled unverified ("AI · unverified"): it is not the source's value.
+
+**In the product.** Every assumption carries this tier (`Assumption.tier`, set from `models.SOURCE_TIERS`; keys not listed there are unverified). Assumption chips show it, with a dashed border when unverified; the data drawer and `/assumptions` list it; the report appendix adds a Basis column and the count of unverified assumptions. Update `SOURCE_TIERS` together with this audit.
 
 ## Analogs (past events used for comparison)
 
