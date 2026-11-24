@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import time
 
 import numpy as np
 
@@ -152,7 +153,9 @@ def decisions(run) -> dict | None:
         rows.append({'id': pol.id, 'actor': pol.actor_label, 'action': item['label'], 'scope': pol.scope, 'rationale': pol.rationale, 'revised': pol.revised,
                      'trigger': f'{item["metric_label"]} reaches {fmt(thr.value)} {thr.unit}', 'lag_days': lag.value, 'origin': thr.origin,
                      'fired_runs': len(days), 'n': n, 'median_day': float(np.median(days)) if days else None,
-                     'median_run': [{'day': d['day'], 'countries': d['countries'][:8], 'n_countries': len(d['countries'])}
+                     # a global trigger fires once for the whole scope, so listing every covered country says nothing
+                     'median_run': [{'day': d['day'], 'countries': d['countries'][:8] if item.get('level') == 'country' else [],
+                                     'n_countries': len(d['countries']) if item.get('level') == 'country' else 0}
                                     for d in run.traj.decisions if d['policy'] == pol.id][:5]})
     out = {'policies': rows, 'adaptation': None,
            'crowds': [{'label': st.label, 'stances': {d.replace('_', ' '): v for d, v in st.stances.items()}, 'rationale': st.rationale}
@@ -205,7 +208,12 @@ def reporter(run, text: str) -> tuple[str, str, str | None]:
             + ' '.join(f'{l}.' for l in lines[1:3]) + f' Driven by {", ".join(run.module.mechanisms[:3])}. '
             f'{len(run.ensemble)}-run ensemble, {confidence_section(run)["overall"]} confidence; a simulation, not a forecast.')
     if llm.enabled():
-        out = llm.structured(llm.prompt('report_headline'), text, HEADLINE_SCHEMA, budget=run.budget, max_tokens=2000)
+        b, t0 = run.budget.child(run.budget.max_usd), time.perf_counter()
+        out = llm.structured(llm.prompt('report_headline'), text, HEADLINE_SCHEMA, budget=b, max_tokens=2000)
+        r = b.report()
+        run.audit.append({'role': 'reporter', 'model': llm.MAIN_MODEL, 'ok': out is not None, 'usd': r['usd'], 'calls': r['calls'],
+                          'cache_hits': r['cache_hits'], 'refusals': r['refusals'], 'errors': r['errors'],
+                          'seconds': round(time.perf_counter() - t0, 2), 'evidence': [], 'output': out})
         if out:
             narrative = out['scale_paragraph'] if out.get('scale_paragraph') and numbers_ok(out['scale_paragraph'], text) else None
             if numbers_ok(out['paragraph'], text):

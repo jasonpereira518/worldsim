@@ -223,7 +223,8 @@ def validate_policies(out: dict, run, ev: Evidence, allowed: str, before: list[d
         if not item or scope not in scopes or (e['action'], scope) in seen or len(policies) >= MAX_POLICIES:
             continue
         seen.add((e['action'], scope))
-        actor = ' '.join(e['actor'].split())[:60] or 'Government'
+        actor = ' '.join(e['actor'].split())
+        actor = (actor if len(actor) <= 60 else actor[:61].rsplit(' ', 1)[0].rstrip(' ,;(')) or 'Government'  # cut at a word
         why = clean_text(e.get('rationale'), allowed)
         pol = Policy(id=slug(f'{e["action"]} {scope}', set()), actor_id=slug(actor, set()), actor_label=actor, action=e['action'], scope=scope,
                      trigger_metric=item['metric'], rationale=why, evidence=[i for i in e.get('evidence', []) if i in ev.seen])

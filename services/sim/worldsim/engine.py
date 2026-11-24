@@ -6,6 +6,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass, field
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 
 import numpy as np
@@ -23,6 +24,7 @@ STATUS_NAMES = list(STATUS)
 ENSEMBLE = int(os.environ.get('WORLDSIM_ENSEMBLE', 24))
 PEOPLE_PER_STEP = 10
 VOICE_CALLS, VOICE_USD = 60, 0.18  # persona voices get their own share of the run budget, so the reporter and critic still run
+VOICE_WORKERS = 8
 STATUS_WEIGHT = np.array([0, 0.6, 1.0, 1.25, 1.1, 1.25, 1.15])
 
 
@@ -200,6 +202,7 @@ def frames(run: Run):
     mname, munit = mod.persona_metric
     spoken = np.zeros(ctx.P, np.float32)  # metric value at the persona's last bubble
     vb = run.budget.child(VOICE_USD, VOICE_CALLS)
+    steps = []  # pass 1 picks every step's speakers; pass 2 adds the voices and yields
     for t in range(ctx.steps + 1):
         date = add_days(spec.start_date, t * ctx.dt)
         ps, pm = tr.p_status[t], tr.p_metric[t]
@@ -211,7 +214,7 @@ def frames(run: Run):
         # choose bubbles: most important changes this step
         grew = np.flatnonzero((ps > 0) & (pm >= 2 * np.maximum(spoken, 1e-6)) & (pm > 0) & (spoken > 0))
         cand = np.union1d(changed[ps[changed] > 0], grew)
-        bubbles: list[Bubble] = []
+        items, payload, inst_ids = [], {}, set()
         if len(cand):
             first = np.array([ctx.p_c[k] not in reached for k in cand])
             novelty = np.where(np.isin(cand, changed), 1.0, 0.8)
@@ -223,7 +226,7 @@ def frames(run: Run):
                     reached.add(int(ctx.p_c[k]))
             pri_map = dict(zip(cand.tolist(), pri.tolist()))
             picks = [(int(k), 'people') for k in order] + [(int(j), 'institution') for j in ichanged]
-            items, payload = [], {}
+            inst_ids = {ctx.institutions[k].id for k, kind in picks if kind == 'institution'}
             for k, kind in picks:
                 if kind == 'people':
                     per = run.personas[k]
@@ -252,15 +255,30 @@ def frames(run: Run):
                 items.append({'id': pid, 'who': per.label, 'voice': per.voice, 'traits': per.traits, 'change': f'{old} → {new}',
                               'crowd': stance_of(ctx, int(ctx.p_c[k])) if kind == 'people' and spec.behavior else None,
                               'numbers': f'{mname} {before:.3g} → {after:.3g} {munit}; ' + ', '.join(f'{k}={v}' for k, v in tctx.items() if k in ('price', 'price_share', 'm'))})
-            llm_lines = run.agent_state.get('voices', {}).get(str(t))  # lines from the first stream, so a replay makes no calls
-            if llm_lines is None:
-                llm_lines = {}
-                if llm.enabled():
-                    inst_ids = {ctx.institutions[k].id for k, kind in picks if kind == 'institution'}
-                    # routine reactions on the fast model; key actors (institutions) on the mid-tier model
-                    llm_lines.update(voices.llm_batch([i for i in items if i['id'] not in inst_ids][:8], vb, t))
-                    llm_lines.update(voices.llm_batch([i for i in items if i['id'] in inst_ids][:4], vb, t, model=llm.MID_MODEL))
-                    run.agent_state.setdefault('voices', {})[str(t)] = llm_lines
+        steps.append((t, date, deltas, payload, items, inst_ids))
+        prev_p, prev_i, prev_pm = ps, tr.i_status[t], pm
+
+    def speak(t, items, inst_ids):
+        # routine reactions on the fast model; key actors (institutions) on the mid-tier model
+        out = voices.llm_batch([i for i in items if i['id'] not in inst_ids][:8], vb, t)
+        out.update(voices.llm_batch([i for i in items if i['id'] in inst_ids][:4], vb, t, model=llm.MID_MODEL))
+        return out
+
+    stored = run.agent_state.get('voices', {})  # lines from the first stream, so a replay makes no calls
+    live = [s for s in steps if s[4] and str(s[0]) not in stored] if llm.enabled() else []
+    # every step's voice calls start now and run ahead of playback (in step order, so the budget favors early steps);
+    # one step at a time made a 365-step outbreak wait about 6 minutes on them
+    # ponytail: up to VOICE_WORKERS calls in flight can overshoot the voice cap by that many calls
+    ex = ThreadPoolExecutor(VOICE_WORKERS) if live else None
+    futs = {s[0]: ex.submit(speak, s[0], s[4], s[5]) for s in live}
+    t_voice = time.perf_counter()
+    try:
+        for t, date, deltas, payload, items, _ in steps:
+            if t in futs:
+                llm_lines = run.agent_state.setdefault('voices', {})[str(t)] = futs[t].result()
+            else:
+                llm_lines = stored.get(str(t), {})
+            bubbles: list[Bubble] = []
             said = set()
             for pid, (text, why, prio, new) in payload.items():
                 l = llm_lines.get(pid)
@@ -270,13 +288,20 @@ def frames(run: Run):
                 bubbles.append(Bubble(id=f'b_{t}_{pid}', persona_id=pid, t=t, text=l['text'] if l else text, sentiment=voices.SENTIMENT.get(new, 0),
                                       priority=round(prio, 2), why=why, decision=l['decision'] if l else None, emotion=l['emotion'] if l else None,
                                       generator='llm' if l else 'template'))
-        events = [SimEvent(id=f'e_{t}_{i}', t=t, date=date, title=e['title'], cause=e['cause'], places=e.get('places', []), severity=e['severity'])
-                  for i, e in enumerate(ev for ev in tr.events if ev['t'] == t)]
-        metrics = {k: float(v) for k, v in tr.metrics[t].items()}
-        yield Frame(t=t, date=date, deltas=deltas, bubbles=bubbles, events=events,
-                    flows=[{'from': f['from'], 'to': f['to'], 'weight': round(f['weight'], 3), 'kind': f['kind']} for f in (tr.flows[t] if tr.flows else [])],
-                    metrics=metrics, layers=tr.layers[t] if tr.layers else {}, band=[round(float(b), 4) for b in band[:, t]])
-        prev_p, prev_i, prev_pm = ps, tr.i_status[t], pm
+            events = [SimEvent(id=f'e_{t}_{i}', t=t, date=date, title=e['title'], cause=e['cause'], places=e.get('places', []), severity=e['severity'])
+                      for i, e in enumerate(ev for ev in tr.events if ev['t'] == t)]
+            metrics = {k: float(v) for k, v in tr.metrics[t].items()}
+            yield Frame(t=t, date=date, deltas=deltas, bubbles=bubbles, events=events,
+                        flows=[{'from': f['from'], 'to': f['to'], 'weight': round(f['weight'], 3), 'kind': f['kind']} for f in (tr.flows[t] if tr.flows else [])],
+                        metrics=metrics, layers=tr.layers[t] if tr.layers else {}, band=[round(float(b), 4) for b in band[:, t]])
+    finally:
+        if ex:
+            ex.shutdown(wait=False, cancel_futures=True)  # a closed stream stops queued calls
+    if futs:
+        r = vb.report()
+        run.audit.append({'role': 'voices', 'model': f'{llm.FAST_MODEL}, {llm.MID_MODEL}', 'ok': True, 'usd': r['usd'], 'calls': r['calls'],
+                          'cache_hits': r['cache_hits'], 'refusals': r['refusals'], 'errors': r['errors'],
+                          'seconds': round(time.perf_counter() - t_voice, 2), 'evidence': [], 'output': None})
 
 
 def sensitivity(run: Run, top: int = 5) -> list[dict]:
