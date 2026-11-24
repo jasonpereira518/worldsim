@@ -12,6 +12,8 @@ from .analogs import analogs_for
 from .voices import numbers_ok
 
 DISCLAIMER = 'Simulation output, not a forecast or advice. Every number traces to a dataset or a labeled assumption listed in the appendix.'
+TIER_LABEL = {'user': 'stated', 'government': 'official', 'peer_reviewed': 'peer-reviewed', 'fit': 'fitted', 'partial': 'partly sourced',
+              'guess': 'unverified'}  # same words as the web client (types.ts TIER_LABEL)
 
 
 def _companies_pct(run, company_role: str, usd_b: float):
@@ -381,9 +383,12 @@ def to_markdown(r: dict) -> str:
     L += [f'- Analog: {a["name"]}: {a["outcomes"]} ({a["source"]})' for a in c.get('analogs', [])]
     L += ['', '## 12. Sources and assumptions', '', '| Dataset | Source | As of | License |', '|---|---|---|---|']
     L += [f'| {d["name"]} | {d["source"]} | {d.get("as_of") or "n/a"} | {d["license"]} |' for d in r['appendix']['datasets']]
-    L += ['', '| Assumption | Value | Origin | Confidence | Source |', '|---|---|---|---|---|']
-    L += [f'| {a["text"]} | {a["value"] if a["value"] is not None else ""} {a.get("unit") or ""} | {a["origin"]} | {a["confidence"]} | {a.get("source") or ""} |'
-          for a in r['appendix']['assumptions']]
+    A = r['appendix']['assumptions']
+    L += ['', f'{sum(a.get("tier") == "guess" for a in A)} of {len(A)} assumptions are unverified: no official or peer-reviewed source sets '
+              'their value, so they enter as ranges (docs/DATA-AUDIT.md).']
+    L += ['', '| Assumption | Value | Basis | Origin | Confidence | Source |', '|---|---|---|---|---|---|']
+    L += [f'| {a["text"]} | {a["value"] if a["value"] is not None else ""} {a.get("unit") or ""} | {TIER_LABEL.get(a.get("tier"), "unverified")} | '
+          f'{a["origin"]} | {a["confidence"]} | {a.get("source") or ""} |' for a in A]
     run = r['appendix']['run']
     L += ['', f'Run `{run["run_id"]}` · seed {run["seed"]} · {run["engine"]} · snapshot `{run["snapshot"]}` · ensemble {run["ensemble_size"]} (median member {run["median_member"]}).', '']
     return '\n'.join(L)

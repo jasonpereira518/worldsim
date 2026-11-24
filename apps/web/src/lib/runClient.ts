@@ -1,6 +1,6 @@
 // Owns the connection to the sim service: create runs and branches, consume the SSE stream, send follow-ups.
 import { useStore, type LiveFeed } from './store';
-import type { ChatAction, DataCatalogEntry, RunListItem, ScenarioSpec, ServerEvent } from './sim/types';
+import { basisLabel, type ChatAction, type DataCatalogEntry, type RunListItem, type ScenarioSpec, type ServerEvent } from './sim/types';
 
 let es: EventSource | null = null;
 const EVENT_TYPES: ServerEvent['type'][] = ['personas', 'meta', 'agent', 'spec', 'scale', 'frame', 'progress', 'summary', 'report', 'done', 'error'];
@@ -129,7 +129,7 @@ async function slash(cmd: string) {
       if (!s.spec) return say('No scenario yet. Describe an event first.');
       s.setDataDrawerOpen(true);
       return s.addMessage({ role: 'assistant', kind: 'list', items: (s.report?.appendix.assumptions ?? s.spec.assumptions).map((a) =>
-        `${a.text}${a.value != null ? ` = ${a.value}${a.unit ? ' ' + a.unit : ''}` : ''}${a.low != null && a.high != null && a.low !== a.high ? ` (range ${a.low}–${a.high})` : ''} — ${a.origin}, ${a.confidence} confidence${a.source ? `; ${a.source}` : ''}`) });
+        `${a.text}${a.value != null ? ` = ${a.value}${a.unit ? ' ' + a.unit : ''}` : ''}${a.low != null && a.high != null && a.low !== a.high ? ` (range ${a.low}–${a.high})` : ''} — ${basisLabel(a)}, ${a.confidence} confidence${a.source ? `; ${a.source}` : ''}`) });
     case '/sources': {
       s.setDataDrawerOpen(true);
       const res = await fetch('/api/data/catalog');

@@ -28,6 +28,18 @@ def ts_fields(name: str) -> dict[str, bool]:
     return {k: q != '?' for k, q in re.findall(r'^\s*([a-z_0-9]+)(\??)\s*:', text, flags=re.M)}
 
 
+def test_every_assumption_carries_a_source_tier():
+    A = lambda id_, origin: models.Assumption(id=id_, text='x', origin=origin, confidence='low')
+    assert A('r0', 'model').tier == 'peer_reviewed'          # audited (docs/DATA-AUDIT.md)
+    assert A('latent_days', 'model').tier == 'government'
+    assert A('theta_rich', 'model').tier == 'fit'
+    assert A('r0', 'llm').tier == 'guess'                    # an agent's value is not the paper's value
+    assert A('r0', 'user').tier == 'user'                    # the user's premise
+    assert A('market_ceiling', 'model').tier == 'guess'      # not listed: unverified
+    assert A('pol_lockdown_origin_threshold', 'model').tier == 'guess'
+    assert models.Assumption(id='r0', text='x', origin='model', confidence='low', tier='partial').tier == 'partial'  # explicit wins
+
+
 @pytest.mark.parametrize('name', PAIRS)
 def test_python_and_typescript_agree(name):
     model = getattr(models, name)

@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useStore } from '@/lib/store';
-import type { DataCatalogEntry } from '@/lib/sim/types';
+import { basisLabel, type DataCatalogEntry } from '@/lib/sim/types';
 
 const ORDER = { unavailable: 0, stale: 1, fresh: 2 } as const;
 
@@ -84,7 +84,7 @@ export default function DataDrawer() {
           {spec.assumptions.map((a) => (
             <li key={a.id} className="flex gap-2">
               <span className="min-w-0 flex-1">{a.text}</span>
-              <span className="shrink-0 text-muted">{a.origin} · {a.confidence}</span>
+              <span className="shrink-0 text-muted">{basisLabel(a)} · {a.confidence}</span>
             </li>
           ))}
         </ul>

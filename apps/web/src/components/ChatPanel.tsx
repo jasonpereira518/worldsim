@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { useStore, type ChatMessage } from '@/lib/store';
 import { EXAMPLES, editAssumption, loadLive, loadRun, refreshHistory, shareLink, submitPrompt } from '@/lib/runClient';
-import type { Assumption, RunListItem, ScenarioSpec, SimEvent, Summary } from '@/lib/sim/types';
+import { basisLabel, tierOf, type Assumption, type RunListItem, type ScenarioSpec, type SimEvent, type Summary } from '@/lib/sim/types';
 import ScaleCard from './ScaleCard';
 import VoicesLog from './VoicesLog';
 import { fmtNum } from './format';
@@ -15,7 +15,8 @@ function Chip({ a, editable }: { a: Assumption; editable: boolean }) {
   const [val, setVal] = useState(String(a.value ?? ''));
   const numeric = typeof a.value === 'number';
   const canEdit = editable && numeric && a.editable !== false && a.id !== 't0';
-  const title = `origin: ${a.origin} · ${a.confidence} confidence${a.source ? ` · ${a.source}` : ''}${a.low != null && a.high != null && a.low !== a.high ? ` · range ${a.low}–${a.high}` : ''}${canEdit ? ' · click to edit and branch' : ''}`;
+  const guess = tierOf(a) === 'guess';
+  const title = `${basisLabel(a)}${guess ? ' (no official or peer-reviewed source sets this value)' : ''} · origin: ${a.origin} · ${a.confidence} confidence${a.source ? ` · ${a.source}` : ''}${a.low != null && a.high != null && a.low !== a.high ? ` · range ${a.low}–${a.high}` : ''}${canEdit ? ' · click to edit and branch' : ''}`;
   if (editing) {
     return (
       <form className="inline-flex items-center gap-1 rounded-full border border-ink bg-bg px-2 py-0.5 text-[11px]" onSubmit={(e) => { e.preventDefault(); const v = Number(val); setEditing(false); if (Number.isFinite(v) && v !== a.value) void editAssumption(a.id, v); }}>
@@ -27,9 +28,9 @@ function Chip({ a, editable }: { a: Assumption; editable: boolean }) {
   }
   return (
     <button type="button" disabled={!canEdit} onClick={() => setEditing(true)} title={title}
-      className={`rounded-full border px-2 py-0.5 text-left text-[11px] ${a.origin === 'user' ? 'border-ink' : 'border-line'} ${canEdit ? 'hover:bg-surface' : 'cursor-default'} bg-bg`}>
+      className={`rounded-full border px-2 py-0.5 text-left text-[11px] ${a.origin === 'user' ? 'border-ink' : 'border-line'} ${guess ? 'border-dashed' : ''} ${canEdit ? 'hover:bg-surface' : 'cursor-default'} bg-bg`}>
       {a.text}{numeric && a.id !== 'horizon_days' && !a.text.includes(String(a.value)) ? <span className="num text-muted"> = {String(a.value)}{a.unit ? ` ${a.unit}` : ''}</span> : null}
-      <span className="ml-1 text-[9px] uppercase tracking-wide text-muted">{a.origin}</span>
+      <span className="ml-1 text-[9px] uppercase tracking-wide text-muted">{basisLabel(a)}</span>
     </button>
   );
 }

@@ -3,10 +3,21 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 Confidence = Literal['high', 'medium', 'low']
 Origin = Literal['data', 'model', 'llm', 'user', 'mock']
+# Where a value comes from (docs/DATA-AUDIT.md): official (government or intergovernmental), peer-reviewed, our fit of a
+# published form to official records, partly sourced (a source sets the form or range, the value is ours), or a guess.
+Tier = Literal['user', 'government', 'peer_reviewed', 'fit', 'partial', 'guess']
+# Audited values that are not guesses; every other model or data value is one. Update with the audit.
+SOURCE_TIERS: dict[str, Tier] = {
+    'latent_days': 'government', 'infectious_days': 'government', 'income_proxy': 'government',
+    'bass_p': 'peer_reviewed', 'bass_q': 'peer_reviewed', 'r0': 'peer_reviewed', 'rupture_factor': 'peer_reviewed',
+    'passthrough': 'peer_reviewed', 'elasticity': 'peer_reviewed',
+    'theta_rich': 'fit', 'beta': 'fit',
+    'severity': 'partial', 'vaccine_day': 'partial', 'theta_drop': 'partial', 'export_share': 'partial',
+}
 PersonaStatus = Literal['unaware', 'aware', 'reacting', 'affected', 'recovered', 'adopted', 'opposed']
 STATUS_CODES: list[str] = ['unaware', 'aware', 'reacting', 'affected', 'recovered', 'adopted', 'opposed']
 EventType = Literal['outbreak', 'disaster', 'conflict', 'policy', 'finance', 'supply_chain', 'launch', 'corporate',
@@ -33,6 +44,13 @@ class Assumption(BaseModel):
     # prior range used by ensembles and sensitivity (numeric assumptions only)
     low: float | None = None
     high: float | None = None
+    tier: Tier | None = None  # filled from the origin and SOURCE_TIERS when not given
+
+    @model_validator(mode='after')
+    def _tier(self) -> Assumption:
+        if self.tier is None:  # an agent's or the mock's value is never the source's value
+            self.tier = 'user' if self.origin == 'user' else 'guess' if self.origin in ('llm', 'mock') else SOURCE_TIERS.get(self.id, 'guess')
+        return self
 
 
 class Place(BaseModel):

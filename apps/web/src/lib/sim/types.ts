@@ -76,7 +76,17 @@ export interface Assumption {
   editable?: boolean;
   low?: number | null;
   high?: number | null;
+  /** where the value comes from (docs/DATA-AUDIT.md); absent from the mock engine */
+  tier?: Tier | null;
 }
+
+export type Tier = 'user' | 'government' | 'peer_reviewed' | 'fit' | 'partial' | 'guess';
+export const TIER_LABEL: Record<Tier, string> = {
+  user: 'stated', government: 'official', peer_reviewed: 'peer-reviewed', fit: 'fitted', partial: 'partly sourced', guess: 'unverified',
+};
+export const tierOf = (a: Assumption): Tier => a.tier ?? (a.origin === 'user' ? 'user' : 'guess');
+/** Chip and table label: the tier, with "AI" for values an agent set. */
+export const basisLabel = (a: Assumption) => (a.origin === 'llm' ? `AI · ${TIER_LABEL[tierOf(a)]}` : TIER_LABEL[tierOf(a)]);
 
 export interface Intervention {
   kind: 'border_closure' | 'lockdown' | 'vaccine' | 'price_change' | 'tariff_change' | 'aid' | 'retaliation' | 'custom';

@@ -1,7 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import type { Report } from '@/lib/sim/types';
+import { basisLabel, tierOf, type Report } from '@/lib/sim/types';
 import BandChart from '../BandChart';
 import ScaleCard from '../ScaleCard';
 import { fmtNum } from '../format';
@@ -236,12 +236,13 @@ export default function ReportView({ runId }: { runId: string }) {
         <thead><tr className="text-left text-[10px] text-muted"><th className="py-1 font-normal">Dataset</th><th className="py-1 font-normal">Source</th><th className="py-1 font-normal">As of</th><th className="py-1 font-normal">License</th></tr></thead>
         <tbody>{r.appendix.datasets.map((d) => <tr key={d.id} className="border-t border-line"><td className="py-1 pr-2">{d.name}</td><td className="py-1 pr-2">{d.source}</td><td className="num py-1 pr-2">{d.as_of ?? 'n/a'}</td><td className="py-1">{d.license}</td></tr>)}</tbody>
       </table>
-      <table className="mt-4 w-full text-[11px]">
-        <thead><tr className="text-left text-[10px] text-muted"><th className="py-1 font-normal">Assumption</th><th className="py-1 text-right font-normal">Value</th><th className="py-1 text-right font-normal">Range</th><th className="py-1 pl-2 font-normal">Origin</th><th className="py-1 font-normal">Confidence</th></tr></thead>
+      <p className="mt-4 text-[11px]">{r.appendix.assumptions.filter((a) => tierOf(a) === 'guess').length} of {r.appendix.assumptions.length} assumptions are unverified: no official or peer-reviewed source sets their value, so they enter as ranges.</p>
+      <table className="mt-2 w-full text-[11px]">
+        <thead><tr className="text-left text-[10px] text-muted"><th className="py-1 font-normal">Assumption</th><th className="py-1 text-right font-normal">Value</th><th className="py-1 text-right font-normal">Range</th><th className="py-1 pl-2 font-normal">Basis</th><th className="py-1 font-normal">Confidence</th></tr></thead>
         <tbody>{r.appendix.assumptions.map((a, i) => (
           <tr key={`${a.id}-${i}`} className="border-t border-line" title={a.source ?? undefined}><td className="py-1 pr-2">{a.text}{a.source ? <span className="block text-[10px] text-muted">{a.source}</span> : null}</td>
             <td className="num py-1 text-right">{a.value ?? ''} {a.unit ?? ''}</td><td className="num py-1 text-right text-muted">{a.low != null && a.high != null && a.low !== a.high ? `${a.low}–${a.high}` : ''}</td>
-            <td className="py-1 pl-2">{a.origin}</td><td className="py-1">{a.confidence}</td></tr>
+            <td className={`py-1 pl-2 ${tierOf(a) === 'guess' ? 'italic text-muted' : ''}`}>{basisLabel(a)}</td><td className="py-1">{a.confidence}</td></tr>
         ))}</tbody>
       </table>
       <p className="mt-4 text-[10px] text-muted">Run <span className="num">{String(run.run_id)}</span> · seed <span className="num">{String(run.seed)}</span> · engine {String(run.engine)} · snapshot <span className="num">{String(run.snapshot)}</span> · ensemble {String(run.ensemble_size)} (median member {String(run.median_member)}) · parser {String(run.parser)}. Replaying this seed and configuration reproduces the run.</p>
