@@ -6,6 +6,9 @@ const nextConfig: NextConfig = {
   // native DuckDB binding: load from node_modules at runtime instead of bundling
   serverExternalPackages: ["@duckdb/node-api"],
   partialPrefetching: true,
+  experimental: {
+    agentUpgrade: "security",
+  },
   turbopack: {
     rules: {
       "*.css": {
