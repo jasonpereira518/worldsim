@@ -30,8 +30,13 @@ def simulate(w, lat, lon, mag, depth, **over):
     spec.origin = Place(id=-1, name='epicenter', country='', iso3='', iso2='', admin1='', lat=lat, lon=lon, pop=0, capital=False, hub=False)
     spec.horizon_days = 14
     run = prepare(make_config(spec, 1, 'bt', w.snapshot_id), w=w)
-    p = {**central(run.priors), 'depth_km': depth, **over}
-    return float(np.median([run.module.simulate(run.ctx, p, np.random.default_rng(i), False).outcomes['deaths'] for i in range(3)]))
+    p = {**central(run.priors), 'depth_km': depth, **{k: v(run) if callable(v) else v for k, v in over.items()}}
+    # the rupture strike is drawn per run, so the median over several draws stands for the central case
+    return float(np.median([run.module.simulate(run.ctx, p, np.random.default_rng(i), False).outcomes['deaths'] for i in range(8)]))
+
+
+def prior(key, end):
+    return lambda run: next(getattr(p, end) for p in run.priors if p.key == key)
 
 
 def test_earthquake_fatalities_backtest():
@@ -39,8 +44,8 @@ def test_earthquake_fatalities_backtest():
     logs, inside = [], 0
     for name, lat, lon, mag, depth, obs, _ in EARTHQUAKES:
         sim = simulate(w, lat, lon, mag, depth)
-        lo = simulate(w, lat, lon, mag, depth, theta_rich=15.2, beta=0.14)
-        hi = simulate(w, lat, lon, mag, depth, theta_rich=13.6, beta=0.24)
+        lo = simulate(w, lat, lon, mag, depth, theta_rich=prior('theta_rich', 'high'), beta=prior('beta', 'low'))
+        hi = simulate(w, lat, lon, mag, depth, theta_rich=prior('theta_rich', 'low'), beta=prior('beta', 'high'))
         logs.append(math.log10(max(sim, 1) / obs))
         inside += lo <= obs <= hi
     bias = 10 ** np.mean(logs)

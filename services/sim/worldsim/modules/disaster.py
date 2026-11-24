@@ -64,6 +64,20 @@ def exposure(ctx: Context, density: float) -> dict:
     return out
 
 
+def fault_distance(lat0: float, lon0: float, lat: np.ndarray, lon: np.ndarray, strike: float, half_km: float) -> np.ndarray:
+    """Horizontal distance (km) from each point to a straight rupture of half-length `half_km` centered on the epicenter
+    and oriented `strike` radians from north. Local flat projection: exact enough where shaking is damaging (< 1,000 km);
+    beyond that, the great-circle distance minus the half-length."""
+    x = (lon - lon0 + 540) % 360 - 180
+    x = x * 111.32 * math.cos(math.radians(lat0))
+    y = (lat - lat0) * 110.57
+    ux, uy = math.sin(strike), math.cos(strike)
+    t = np.clip(x * ux + y * uy, -half_km, half_km)
+    flat = np.hypot(x - t * ux, y - t * uy)
+    far = np.maximum(haversine_km(lat0, lon0, lat, lon) - half_km, 0)
+    return np.where(far > 1000, far, flat)
+
+
 def intensity(magnitude: float, R_km: np.ndarray, attenuation: float) -> np.ndarray:
     """Simplified isoseismal relation MMI = 1 + 1.5·M − c·log10(R), clipped to [1, 12]."""
     return np.clip(1 + 1.5 * magnitude - attenuation * np.log10(np.maximum(R_km, 1)), 1, 12)
@@ -83,8 +97,9 @@ class Earthquake(Module):
     mechanisms = ['ground shaking', 'building vulnerability', 'casualties and displacement', 'utility outage', 'relief and recovery']
     explain_keys = [('gdp_per_capita_usd', 'GDP per capita $'), ('urban_pct', 'urban %'), ('hospital_beds_per1000', 'hospital beds per 1,000')]
     calibration_note = ('Backtested on six earthquakes (Izmit 1999, Kahramanmaraş 2023, Gorkha 2015, Haiti 2010, Kumamoto 2016, Wenchuan 2008): '
-                        'central-run deaths within a factor of 4 of the record for five; Gorkha is overpredicted about 30× (Kathmandu shook less than '
-                        'its rupture distance implies). Geometric-mean bias about 1.25×. Expect order-of-magnitude, not exact, tolls. tests/test_backtests.py')
+                        'median deaths over rupture strikes within a factor of 4 of the record for five (geometric-mean bias about 1.05× on those five); '
+                        'Gorkha is overpredicted about 50× (Kathmandu shook less than its rupture distance implies). Expect order-of-magnitude, '
+                        'not exact, tolls. tests/test_backtests.py')
     policy_menu = {
         'aid': {'kind': 'aid', 'label': 'international relief deployment', 'metric': 'deaths_reported', 'metric_label': 'reported deaths', 'level': 'global',
                 'threshold': (100.0, 10.0, 10000.0, 'deaths'), 'lag': (2.0, 1.0, 10.0), 'scope': 'all',
@@ -99,12 +114,12 @@ class Earthquake(Module):
             Prior('depth_km', 'Hypocenter depth', 15.0, 8.0, 30.0, 'km', 'model', 'low'),
             Prior('attenuation', 'Intensity decay c with log10 distance (MMI = 1 + 1.5·M − c·log10 R)', 3.0, 2.6, 3.4, '', 'model', 'low',
                   'simplified isoseismal relation, not a regional GMPE'),
-            Prior('theta_rich', 'PAGER-style θ for the most resilient building stock (calibrated on six historical events)', 14.4, 13.6, 15.2, 'MMI', 'model', 'low', PAGER),
+            Prior('theta_rich', 'PAGER-style θ for the most resilient building stock (calibrated on six historical events)', 14.1, 13.3, 14.9, 'MMI', 'model', 'low', PAGER),
             Prior('theta_drop', 'Reduction of θ for the most vulnerable stock', 3.5, 2.5, 4.5, 'MMI', 'model', 'low', PAGER),
             Prior('beta', 'PAGER-style β (spread of the fatality curve)', 0.18, 0.14, 0.24, '', 'model', 'low', PAGER),
             Prior('urban_density', 'Urban population density used to size city discs', 6000.0, 3000.0, 12000.0, 'people/km²', 'model', 'low'),
-            Prior('rupture_credit', 'Share of half the rupture length credited toward each site (rupture direction unknown)', 0.5, 0.2, 0.8, 'share', 'model', 'low',
-                  'Wells & Coppersmith (1994): log10 L = −3.22 + 0.69·Mw'),
+            Prior('rupture_factor', 'Rupture length relative to the Wells & Coppersmith scaling (strike drawn per run)', 1.0, 0.7, 1.6, '×', 'model', 'low',
+                  'Wells & Coppersmith (1994) subsurface rupture length: log10 L = −2.44 + 0.59·Mw; large strike-slip ruptures run longer'),
             Prior('injury_ratio', 'Injuries per death', 3.5, 2.0, 6.0, '', 'model', 'low'),
             Prior('displacement', 'Displaced share of residents in destroyed housing', 0.6, 0.3, 1.0, 'share', 'model', 'low'),
             Prior('restore_days', 'Utility restoration time constant (resilient grid)', 7.0, 3.0, 15.0, 'days', 'model', 'low'),
@@ -120,10 +135,11 @@ class Earthquake(Module):
         lat0, lon0 = (o.lat, o.lon) if o else (float(ctx.loc_lat[0]), float(ctx.loc_lon[0]))
         d = haversine_km(lat0, lon0, ctx.loc_lat, ctx.loc_lon)
         ex = exposure(ctx, p['urban_density'])  # cities as discs + rural population spread over provinces by area
-        de = haversine_km(lat0, lon0, ex['lat'], ex['lon'])
-        # finite rupture: Wells & Coppersmith (1994) surface rupture length; direction unknown, so partial credit f
-        rupture = 10 ** (-3.22 + 0.69 * p['magnitude'])
-        de = np.maximum(de - p['rupture_credit'] * rupture / 2, 0)
+        # finite rupture: a bilateral line through the epicenter, Wells & Coppersmith (1994) subsurface rupture length
+        # (log10 L = −2.44 + 0.59·Mw) times an uncertainty factor; the strike is unknown, so each member draws one
+        strike = rng.uniform(0, math.pi)
+        half = 10 ** (-2.44 + 0.59 * p['magnitude']) * p['rupture_factor'] / 2
+        de = fault_distance(lat0, lon0, ex['lat'], ex['lon'], strike, half)
         dist = np.sqrt(de[:, None] ** 2 + (ex['radius'][:, None] * RING[None]) ** 2
                        + 2 * de[:, None] * ex['radius'][:, None] * RING[None] * COS[None])
         R = np.sqrt(dist ** 2 + p['depth_km'] ** 2)

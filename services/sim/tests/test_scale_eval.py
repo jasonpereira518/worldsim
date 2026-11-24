@@ -18,14 +18,12 @@ REAL = SNAP / (SNAP / 'LATEST').read_text().strip() if (SNAP / 'LATEST').exists(
 pytestmark = pytest.mark.skipif(REAL is None or not (REAL / 'admin1.parquet').exists(), reason='real data snapshot not present')
 CASES = [json.loads(l) for l in (Path(__file__).resolve().parents[1] / 'evals' / 'scale_cases.jsonl').read_text().splitlines() if l.strip()]
 WITHIN_10X = ('below', 'comparable', 'above')
-# 2026-11-23 baseline on snapshot 2026-10-23: reach 7/11, magnitude 7/10. With the 1:10m gazetteer the Izmit,
-# Kahramanmaras and Kumamoto epicenters are right (before, they fell back to the capital and two reach classes were
-# right by accident). Quakes count affected provinces inside a "Rest of <country>" location (Trajectory.affected_places),
-# so Kahramanmaras is regional, not local. Misses: Kahramanmaras regional and Gorkha regional (recorded multi-country:
-# Aleppo and Bihar sit just outside the MMI ≥ 7 footprint of the simplified isoseismal relation), Kumamoto local (its
-# ~32 km MMI ≥ 7 zone covers one city and one prefecture), the iPhone global (multi-country); novel-pathogen defaults
-# land far above H1N1 and SARS. Widening the footprint would raise the backtested death tolls.
-REACH_FLOOR, BAND_FLOOR = 7, 5
+# 2026-11-24 baseline on snapshot 2026-10-23: reach 10/11, magnitude 7/10. Epicenters come from the 1:10m gazetteer;
+# quakes count affected provinces inside a "Rest of <country>" location (Trajectory.affected_places); the rupture is a
+# line with a strike drawn per run, so sites along the fault shake harder (Kahramanmaras and Gorkha reach their
+# neighbors, Kumamoto spans places). Misses: the iPhone global (multi-country); novel-pathogen defaults land far above
+# H1N1 and SARS; Gorkha deaths far above the record.
+REACH_FLOOR, BAND_FLOOR = 9, 6
 
 
 def evaluate(w, case, assessor=False):
