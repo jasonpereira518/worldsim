@@ -267,8 +267,7 @@ def frames(run: Run):
     stored = run.agent_state.get('voices', {})  # lines from the first stream, so a replay makes no calls
     live = [s for s in steps if s[4] and str(s[0]) not in stored] if llm.enabled() else []
     # every step's voice calls start now and run ahead of playback (in step order, so the budget favors early steps);
-    # one step at a time made a 365-step outbreak wait about 6 minutes on them
-    # ponytail: up to VOICE_WORKERS calls in flight can overshoot the voice cap by that many calls
+    # one step at a time made a 365-step outbreak wait about 6 minutes on them (Budget.allow reserves, so the cap holds)
     ex = ThreadPoolExecutor(VOICE_WORKERS) if live else None
     futs = {s[0]: ex.submit(speak, s[0], s[4], s[5]) for s in live}
     t_voice = time.perf_counter()

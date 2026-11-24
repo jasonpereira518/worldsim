@@ -15,6 +15,7 @@ services:
     volumes:
       - ./data/snapshots:/data/snapshots:ro
       - ./apps/web/data/places.json:/data/places.json:ro
+      - ./apps/web/data/gazetteer.json:/data/gazetteer.json:ro
       - sim-state:/state
     environment:
       # set WORLDSIM_LLM=on and provide ANTHROPIC_API_KEY (via an env file or secret) to enable LLM parsing and voices

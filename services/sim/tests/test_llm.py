@@ -32,6 +32,15 @@ def test_llm_bubbles_validated(monkeypatch, tmp_path):
     assert fake.calls == 1 and b.cache_hits == 1  # cached
 
 
+def test_concurrent_callers_never_exceed_the_call_cap():
+    from concurrent.futures import ThreadPoolExecutor
+    run_b = llm.Budget(max_calls=100)
+    b = run_b.child(1.0, 5)
+    with ThreadPoolExecutor(8) as ex:
+        granted = sum(ex.map(lambda _: b.allow(), range(32)))
+    assert granted == 5 and b.calls == 5 and run_b.calls == 5  # a call is counted when allowed, not when it returns
+
+
 def test_budget_and_refusal(monkeypatch, tmp_path):
     monkeypatch.setenv('WORLDSIM_LLM', 'on')
     monkeypatch.setattr(llm, 'CACHE_DIR', tmp_path)

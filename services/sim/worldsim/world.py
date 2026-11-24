@@ -18,6 +18,7 @@ _HERE = Path(__file__).resolve()
 ROOT = _HERE.parents[3] if len(_HERE.parents) > 3 else _HERE.parent
 SNAPSHOTS = Path(os.environ.get('WORLDSIM_SNAPSHOTS', ROOT / 'data' / 'snapshots'))
 PLACES_JSON = Path(os.environ.get('WORLDSIM_PLACES', ROOT / 'apps' / 'web' / 'data' / 'places.json'))
+GAZETTEER_JSON = Path(os.environ.get('WORLDSIM_GAZETTEER', PLACES_JSON.with_name('gazetteer.json')))
 
 
 @dataclass
@@ -122,6 +123,18 @@ def _load_cities() -> list[City]:
     raw = json.loads(PLACES_JSON.read_text())
     return [City(id=p['id'], name=p['name'], iso3=p['iso3'], admin1=p.get('admin1') or '', lat=p['lat'], lon=p['lon'],
                  pop=float(p['pop']), capital=p['capital'], hub=p['hub'], country=p['country']) for p in raw]
+
+
+@lru_cache(maxsize=1)
+def gazetteer() -> list[tuple[tuple[str, ...], City]]:
+    """Lookup-only places (Natural Earth 1:10m, pop ≥ 50k; apps/web/scripts/fetch-gazetteer.mjs) with their names: finds
+    origins the persona seed lacks without placing personas there. Empty when the file is absent."""
+    if not GAZETTEER_JSON.exists():
+        return []
+    return [((p['name'], p['ascii']) if p.get('ascii') else (p['name'],),
+             City(id=p['id'], name=p['name'], iso3=p['iso3'], admin1=p.get('admin1') or '', lat=p['lat'], lon=p['lon'],
+                  pop=float(p['pop']), capital=False, hub=False, country=p['country']))
+            for p in json.loads(GAZETTEER_JSON.read_text())['places']]
 
 
 def load_world(snapshot_dir: Path | None = None) -> World:

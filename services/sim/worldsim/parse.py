@@ -8,7 +8,7 @@ import re
 from . import T0, llm
 from .agents import intake
 from .models import Assumption, Intervention, Place, Plausibility, ScenarioSpec
-from .world import World
+from .world import World, gazetteer
 
 RULES: list[tuple[str, str, list[str], int, int, list[str], list[str]]] = [
     ('outbreak', r'\b(outbreak|pandemic|epidemic|virus|variant|h5n1|h1n1|ebola|influenza|flu|transmission|infect\w*|cholera|measles|covid|sars|mers|pathogen)\b',
@@ -82,10 +82,19 @@ def find_place(text: str, w: World) -> Place | None:
     for k, c in cities.items():
         if len(k) > 3:
             consider(k, c)
+    seed = best
     for iso3, country in w.countries.items():
         consider(country.name.lower(), capital.get(iso3))
     for k, iso3 in DEMONYMS.items():
         consider(k, capital.get(iso3))
+    # lookup-only places, matched as written (capitalized) so "reading" or "nice" in a sentence is not a place; a city
+    # named in a country beats the country itself ("Izmit, Turkey" is Izmit, not Ankara)
+    from_country = best is not None and best is not seed
+    for names, c in gazetteer():
+        for n in names:
+            if len(n) > 3 and (len(n) > best_len or (from_country and c.iso3 == best.iso3)) \
+                    and re.search(rf'(^|[^A-Za-z]){re.escape(n)}([^A-Za-z]|$)', text):
+                best, best_len, from_country = c, len(n), False
     if best is None:
         return None
     return Place(id=best.id, name=best.name, country=best.country, iso3=best.iso3, iso2='', admin1=best.admin1,

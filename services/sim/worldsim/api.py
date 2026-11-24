@@ -80,7 +80,7 @@ def get_run(run_id: str) -> Run:
     run = prepare(cfg, overrides)
     run.agent_state = load_agents(run_id)
     with LOCK:
-        CACHE[run_id] = run
+        run = CACHE.setdefault(run_id, run)  # concurrent first requests share one Run (and so one run.lock)
         while len(CACHE) > 12:
             CACHE.popitem(last=False)
     return run
@@ -265,6 +265,16 @@ def stream(run_id: str):
     run = get_run(run_id)
 
     def gen():
+        # one pipeline per run: a second stream (or a report request) waits for the first, then replays its result
+        if not run.lock.acquire(blocking=False):
+            yield sse('progress', {'t': 0, 'total': run.ctx.steps, 'label': 'This run is already streaming elsewhere; waiting for it'})
+            run.lock.acquire()
+        try:
+            yield from body()
+        finally:
+            run.lock.release()  # also on client disconnect (GeneratorExit)
+
+    def body():
         try:
             yield sse('personas', {'personas': [p.model_dump() for p in run.personas]})
             m = run.module

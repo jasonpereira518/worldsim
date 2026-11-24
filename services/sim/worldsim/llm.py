@@ -44,6 +44,9 @@ def cost(model: str, usage) -> float:
             + g('cache_creation_input_tokens') * pin * 1.25) / 1e6
 
 
+_RESERVE = threading.Lock()  # check-and-reserve across a budget and its parents in one step
+
+
 @dataclass
 class Budget:
     """Spend caps for one run, or for one agent role inside a run (`parent` is then the run budget and is charged too)."""
@@ -63,20 +66,28 @@ class Budget:
         return Budget(max_calls=max_calls or self.max_calls, max_usd=max_usd, parent=self)
 
     def allow(self, step: int | None = None) -> bool:
-        with self._lock:
-            if self.calls >= self.max_calls or self.usd >= self.max_usd:
+        """Reserve one call on this budget and every parent, or False when any cap is reached. The call is counted here,
+        before it is made, so concurrent callers (persona voices) cannot overshoot max_calls; dollars are charged in
+        record() once the usage is known."""
+        with _RESERVE:
+            chain, b = [], self
+            while b:
+                chain.append(b)
+                b = b.parent
+            if any(x.calls >= x.max_calls or x.usd >= x.max_usd for x in chain):
                 return False
             if step is not None and self.step_calls.get(step, 0) >= self.max_calls_per_step:
                 return False
-        return self.parent.allow() if self.parent else True
+            for x in chain:
+                x.calls += 1
+            if step is not None:
+                self.step_calls[step] = self.step_calls.get(step, 0) + 1
+        return True
 
     def record(self, model: str, usage, step: int | None = None) -> None:
         c = cost(model, usage)
         with self._lock:
-            self.calls += 1
             self.usd += c
-            if step is not None:
-                self.step_calls[step] = self.step_calls.get(step, 0) + 1
         if self.parent:
             self.parent.record(model, usage)
 

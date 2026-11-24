@@ -271,7 +271,9 @@ Deviations from the plan, with the reason:
 
 **Crowd behavior.** A module's `behavior_dims` (epidemiology: contact reduction, compliance; launch: adoption willingness) take stance labels per cluster (origin country, World Bank income groups). Code maps each label to a multiplier band and makes it a prior `beh_<cluster>_<dim>`, appended after the module's priors so earlier draws are unchanged.
 
-**Evaluation.** `evals/scale_cases.jsonl` phrases eleven historical events as prompts; `tests/test_scale_eval.py` scores reach class and magnitude band against the analog library on the real snapshot (2026-10-24: reach 8 of 11, within 10× in 6 of 10) and fails below those floors.
+**Evaluation.** `evals/scale_cases.jsonl` phrases eleven historical events as prompts; `tests/test_scale_eval.py` scores reach class and magnitude band against the analog library on the real snapshot (2026-11-23: reach 7 of 11, within 10× in 7 of 10) and fails below floors of 7 and 5. Origins and epicenters come from `apps/web/data/places.json` (Natural Earth 1:50m, which also places personas) and then a lookup-only gazetteer, `apps/web/data/gazetteer.json` (Natural Earth 1:10m, population ≥ 50,000; `apps/web/scripts/fetch-gazetteer.mjs`), matched only as capitalized in the prompt.
+
+**Concurrency.** `Budget.allow` reserves a call before it is made, so the eight concurrent voice workers cannot overshoot a call cap. Every stream of a run holds `Run.lock` while it runs the pipeline, so a second stream or a report request waits and then replays; `api.get_run` hands concurrent first requests the same `Run`.
 
 Not built: per-persona LLM agents, per-step LLM decisions inside a run, an LLM orchestrator, fine-tuning. Actors do not yet replace the hard-coded institution personas, and disaster, trade and generic have no crowd dimensions.
 

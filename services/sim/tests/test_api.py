@@ -63,6 +63,23 @@ def test_validation_and_unknown_run():
     assert c.get('/runs/..%2Fetc/stream').status_code == 404
 
 
+def test_concurrent_streams_and_report_run_the_pipeline_once(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from fastapi.testclient import TestClient
+    from worldsim import api, engine
+    calls, real = [], engine.finish
+    counted = lambda run: (calls.append(run.config.run_id), real(run))
+    monkeypatch.setattr(api, 'finish', counted)
+    monkeypatch.setattr(engine, 'finish', counted)
+    c = TestClient(api.app)
+    rid = c.post('/runs', json={'prompt': 'A magnitude 7.0 earthquake hits Port-au-Prince, Haiti'}).json()['run_id']
+    jobs = [lambda: c.get(f'/runs/{rid}/stream').text, lambda: c.get(f'/runs/{rid}/stream').text, lambda: c.get(f'/runs/{rid}/report').text]
+    with ThreadPoolExecutor(3) as ex:
+        out = list(ex.map(lambda f: f(), jobs))
+    assert calls == [rid]
+    assert all('event: done' in s for s in out[:2])
+
+
 def test_concurrent_report_requests_run_the_pipeline_once():
     from concurrent.futures import ThreadPoolExecutor
     from fastapi.testclient import TestClient

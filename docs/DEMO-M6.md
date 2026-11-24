@@ -13,7 +13,7 @@ New in this milestone:
 - `test_agents.py`: every agent role against a scripted fake client: the tool loop, budgets, clamping, uncited proposals dropped, setup and re-plan in the stream, and replays that make no API calls.
 - `test_policies.py`: actor policies fire where their trigger crosses, lockdowns lower deaths, the detail run still equals its ensemble member.
 - `test_behavior.py`: crowd stances become banded priors; no stance means a bit-identical run.
-- `test_scale_eval.py`: eleven historical events phrased as prompts (`evals/scale_cases.jsonl`), scored against the analog library on the real snapshot. Run it with `-s` to see the table. Today: reach class right in 8 of 11, headline outcome within 10× of the record in 6 of 10.
+- `test_scale_eval.py`: eleven historical events phrased as prompts (`evals/scale_cases.jsonl`), scored against the analog library on the real snapshot. Run it with `-s` to see the table. Today: reach class right in 7 of 11, headline outcome within 10× of the record in 7 of 10.
 
 ## 2. Scale card (LLM off)
 
