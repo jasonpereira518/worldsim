@@ -88,7 +88,7 @@ class Trade(Module):
         return [
             Prior('tariff_pct', 'Tariff rate' if rate else 'Tariff rate (not stated; prior)', float(rate or 25), float(rate or 10), float(rate or 50), '%',
                   'user' if rate else 'model', 'high' if rate else 'low'),
-            Prior('export_share', 'Goods exports as a share of GDP (all countries)', 0.22, 0.15, 0.30, 'share', 'model', 'low', GRAVITY),
+            Prior('export_share', 'Goods exports as a share of GDP where WDI has no merchandise exports', 0.22, 0.15, 0.30, 'share', 'model', 'low', GRAVITY),
             Prior('product_share', f'Share of the bilateral goods flow that is {label}', share, slo, shi, 'share', 'model', 'low',
                   'analyst prior; UN Comtrade HS-level flows not yet ingested'),
             Prior('passthrough', 'Share of the tariff passed through to importer prices', 0.6, 0.3, 0.9, 'share', 'model', 'low',
@@ -109,7 +109,10 @@ class Trade(Module):
         w = gdp[None, :] / d
         np.fill_diagonal(w, 0)
         w /= w.sum(1, keepdims=True) + 1e-12
-        return w * (gdp * export_share)[:, None], gdp  # X[i, j]: annual goods exports i → j (USD)
+        # each exporter's goods exports: WDI merchandise exports (WTO data), the prior share of GDP where it is missing
+        exports = ctx.ind('merch_exports_usd')
+        exports = np.where(np.isfinite(exports), exports, gdp * export_share)
+        return w * exports[:, None], gdp  # X[i, j]: annual goods exports i → j (USD)
 
     def simulate(self, ctx: Context, p: dict, rng: np.random.Generator, detail: bool) -> Trajectory:
         T, C, dt_w = ctx.steps, ctx.C, ctx.dt / 7

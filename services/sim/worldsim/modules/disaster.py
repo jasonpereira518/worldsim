@@ -78,9 +78,11 @@ def fault_distance(lat0: float, lon0: float, lat: np.ndarray, lon: np.ndarray, s
     return np.where(far > 1000, far, flat)
 
 
-def intensity(magnitude: float, R_km: np.ndarray, attenuation: float) -> np.ndarray:
-    """Simplified isoseismal relation MMI = 1 + 1.5·M − c·log10(R), clipped to [1, 12]."""
-    return np.clip(1 + 1.5 * magnitude - attenuation * np.log10(np.maximum(R_km, 1)), 1, 12)
+def intensity(magnitude: float, R_km: np.ndarray, offset: float = 0.0) -> np.ndarray:
+    """Allen, Wald & Worden (2012) intensity prediction equation for active crustal regions, rupture distance:
+    MMI = 3.950 + 0.913·M − 1.107·ln√(R² + (1 + 0.813·e^(M−5))²), plus an offset, clipped to [1, 12]."""
+    rm = (1 + 0.813 * np.exp(magnitude - 5)) ** 2
+    return np.clip(3.950 + 0.913 * magnitude - 1.107 * np.log(np.sqrt(R_km ** 2 + rm)) + offset, 1, 12)
 
 
 class Earthquake(Module):
@@ -97,8 +99,8 @@ class Earthquake(Module):
     mechanisms = ['ground shaking', 'building vulnerability', 'casualties and displacement', 'utility outage', 'relief and recovery']
     explain_keys = [('gdp_per_capita_usd', 'GDP per capita $'), ('urban_pct', 'urban %'), ('hospital_beds_per1000', 'hospital beds per 1,000')]
     calibration_note = ('Backtested on six earthquakes (Izmit 1999, Kahramanmaraş 2023, Gorkha 2015, Haiti 2010, Kumamoto 2016, Wenchuan 2008): '
-                        'median deaths over rupture strikes within a factor of 4 of the record for five (geometric-mean bias about 1.05× on those five); '
-                        'Gorkha is overpredicted about 50× (Kathmandu shook less than its rupture distance implies). Expect order-of-magnitude, '
+                        'median deaths over rupture strikes within a factor of 4 of the record for five (geometric-mean bias about 0.9× on those five); '
+                        'Gorkha is overpredicted about 25× (Kathmandu shook less than its rupture distance implies). Expect order-of-magnitude, '
                         'not exact, tolls. tests/test_backtests.py')
     policy_menu = {
         'aid': {'kind': 'aid', 'label': 'international relief deployment', 'metric': 'deaths_reported', 'metric_label': 'reported deaths', 'level': 'global',
@@ -112,9 +114,9 @@ class Earthquake(Module):
             Prior('magnitude', 'Moment magnitude' if mag else 'Moment magnitude (not stated; prior)', float(mag or 7.0), float(mag or 6.3), float(mag or 7.8),
                   'Mw', 'user' if mag else 'model', 'high' if mag else 'low'),
             Prior('depth_km', 'Hypocenter depth', 15.0, 8.0, 30.0, 'km', 'model', 'low'),
-            Prior('attenuation', 'Intensity decay c with log10 distance (MMI = 1 + 1.5·M − c·log10 R)', 3.0, 2.6, 3.4, '', 'model', 'low',
-                  'simplified isoseismal relation, not a regional GMPE'),
-            Prior('theta_rich', 'PAGER-style θ for the most resilient building stock (calibrated on six historical events)', 14.1, 13.3, 14.9, 'MMI', 'model', 'low', PAGER),
+            Prior('intensity_offset', 'Shift of shaking intensity from the published equation (regional site and path effects)', 0.0, -0.7, 0.7, 'MMI', 'model', 'low',
+                  'Allen, Wald & Worden (2012), J Seismol 16:409-433, rupture-distance IPE; range about its standard deviation (0.72 MMI)'),
+            Prior('theta_rich', 'PAGER-style θ for the most resilient building stock (calibrated on six historical events)', 13.2, 12.4, 14.0, 'MMI', 'model', 'low', PAGER),
             Prior('theta_drop', 'Reduction of θ for the most vulnerable stock', 3.5, 2.5, 4.5, 'MMI', 'model', 'low', PAGER),
             Prior('beta', 'PAGER-style β (spread of the fatality curve)', 0.18, 0.14, 0.24, '', 'model', 'low', PAGER),
             Prior('urban_density', 'Urban population density used to size city discs', 6000.0, 3000.0, 12000.0, 'people/km²', 'model', 'low'),
@@ -142,11 +144,14 @@ class Earthquake(Module):
         de = fault_distance(lat0, lon0, ex['lat'], ex['lon'], strike, half)
         dist = np.sqrt(de[:, None] ** 2 + (ex['radius'][:, None] * RING[None]) ** 2
                        + 2 * de[:, None] * ex['radius'][:, None] * RING[None] * COS[None])
-        R = np.sqrt(dist ** 2 + p['depth_km'] ** 2)
-        mmi_r = intensity(p['magnitude'], R, p['attenuation'])  # (exposure points, rings)
+        # rupture distance: down to the top of the rupture, the hypocenter less half the Wells & Coppersmith (1994) width
+        # (log10 W = −1.01 + 0.32·Mw) on a vertical fault (dip unknown); large ruptures reach the surface
+        z_top = max(p['depth_km'] - 10 ** (-1.01 + 0.32 * p['magnitude']) / 2, 0.0)
+        R = np.sqrt(dist ** 2 + z_top ** 2)
+        mmi_r = intensity(p['magnitude'], R, p['intensity_offset'])  # (exposure points, rings)
         as_day = int(rng.integers(1, 10))  # one large aftershock (Båth's law) on an early day
         as_mag = p['magnitude'] - 1.2 + rng.normal(0, 0.2)
-        mmi_as_r = np.maximum(intensity(as_mag, R, p['attenuation']), mmi_r)
+        mmi_as_r = np.maximum(intensity(as_mag, R, p['intensity_offset']), mmi_r)
         vul_e = vulnerability(ctx.gdp_pc)[ex['c']]
         theta = (p['theta_rich'] - p['theta_drop'] * vul_e)[:, None]
 

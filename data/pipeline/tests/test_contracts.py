@@ -76,7 +76,7 @@ def test_indicator_ranges(key, lo, hi):
 
 
 def test_indicator_coverage_and_keys():
-    assert sql("SELECT count(DISTINCT key) FROM {indicators}")[0][0] == 19 + 34
+    assert sql("SELECT count(DISTINCT key) FROM {indicators}")[0][0] == 20 + 34
     assert sql("SELECT count(DISTINCT iso3) FROM {indicators} WHERE key = 'population'")[0][0] >= 210
     year, pop = sql("SELECT year, value FROM {indicators} WHERE iso3 = 'VNM' AND key = 'population' ORDER BY year DESC LIMIT 1")[0]
     assert year >= 2024 and 9e7 < pop < 1.2e8

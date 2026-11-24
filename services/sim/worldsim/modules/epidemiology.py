@@ -14,7 +14,26 @@ R0_SRC = 'Biggerstaff et al. (2014), systematic review of influenza reproduction
 FLU_SRC = 'Influenza natural history: latent ~1-2 days, infectious ~4-6 days (CDC, WHO pandemic planning assumptions)'
 # Stylized POLYMOD-shaped contact matrix between age groups 0-14, 15-64, 65+ (model)
 CONTACT = np.array([[7.0, 5.0, 1.0], [5.0, 10.0, 2.0], [1.0, 2.0, 3.0]])
-IFR_BASE = np.array([0.0003, 0.002, 0.02])   # by age, before the severity multiplier (model prior shape)
+# Infection fatality ratio by age decade (0-9 … 80+), COVID-19 in mainland China: Verity et al. (2020), Lancet Infect Dis
+# 20:669-677, Table 1. The shape of the age curve; `severity` scales it for the scenario's pathogen.
+IFR_DECADE = np.array([0.0000161, 0.0000695, 0.000309, 0.000844, 0.00161, 0.00595, 0.0193, 0.0428, 0.0780])
+AGE_BANDS = ['00_04', '05_09', '10_14', '15_19', '20_24', '25_29', '30_34', '35_39', '40_44', '45_49', '50_54', '55_59', '60_64',
+             '65_69', '70_74', '75_79', '80_up']  # WDI 5-year bands (UN WPP)
+GROUPS = [slice(0, 3), slice(3, 13), slice(13, 17)]  # 0-14, 15-64, 65+
+
+
+def age_ifr(ctx: Context) -> np.ndarray:
+    """(C, 3) IFR for ages 0-14, 15-64, 65+: the decade IFRs weighted by each country's own 5-year age structure (both
+    sexes); countries without bands use the median structure."""
+    f = np.stack([ctx.ind(f'age_{b}_female_pct') for b in AGE_BANDS], 1)
+    m = np.stack([ctx.ind(f'age_{b}_male_pct') for b in AGE_BANDS], 1)
+    pf, pm = ctx.ind('population_female'), ctx.ind('population_male')
+    wf = np.where(np.isfinite(pf) & np.isfinite(pm), pf / np.maximum(pf + pm, 1), 0.5)[:, None]
+    share = wf * f + (1 - wf) * m
+    ok = np.isfinite(share).all(1)
+    share = np.where(ok[:, None], share, np.nanmedian(share[ok], 0) if ok.any() else 1.0)
+    band = IFR_DECADE[np.minimum(np.arange(len(AGE_BANDS)) // 2, 8)]
+    return np.stack([(share[:, g] * band[g]).sum(1) / np.maximum(share[:, g].sum(1), 1e-12) for g in GROUPS], 1)
 AGE_DEFAULT = np.array([0.25, 0.66, 0.09])
 
 
@@ -51,8 +70,8 @@ class Epidemiology(Module):
             Prior('r0', 'Basic reproduction number R0', 1.9, 1.4, 2.8, '', 'model', 'low', R0_SRC),
             Prior('latent_days', 'Latent period', 2.0, 1.0, 4.0, 'days', 'model', 'medium', FLU_SRC),
             Prior('infectious_days', 'Infectious period', 5.0, 3.0, 7.0, 'days', 'model', 'medium', FLU_SRC),
-            Prior('severity', 'Severity multiplier on the age-specific fatality curve (0.03% / 0.2% / 2%)', 1.0, 0.2, 5.0, '×', 'model', 'low',
-                  'No human-transmissible H5N1 exists to calibrate against; range spans 2009 H1N1 to 1918-like severity'),
+            Prior('severity', 'Severity relative to COVID-19 by age (Verity et al. 2020; world IFR 0.62% at 1×)', 0.55, 0.11, 2.8, '×', 'model', 'low',
+                  'No human-transmissible H5N1 exists to calibrate against; range spans 2009 H1N1 to 1918-like severity (world IFR ~0.07%-1.7%)'),
             Prior('hosp_per_death', 'Hospitalizations per death', 8.0, 5.0, 15.0, '', 'model', 'low'),
             Prior('surge_bed_share', 'Share of hospital beds available for surge', 0.25, 0.1, 0.4, 'share', 'model', 'low'),
             Prior('overflow_mult', 'Fatality multiplier for patients beyond surge capacity', 2.0, 1.5, 3.0, '×', 'model', 'low'),
@@ -94,11 +113,11 @@ class Epidemiology(Module):
         # spectral radius of the next-generation shape per country, to calibrate β to R0
         rho = np.array([np.max(np.abs(np.linalg.eigvals(CONTACT * age[c][None, :]))) for c in range(ctx.C)])
         hic = np.array([ctx.world.countries[c].income_group == 'High income' if c in ctx.world.countries else False for c in ctx.iso3])
-        return age, N, beds, beds_missing, phys, G, rho, hic
+        return age, N, beds, beds_missing, phys, G, rho, hic, age_ifr(ctx)
 
     def simulate(self, ctx: Context, p: dict, rng: np.random.Generator, detail: bool) -> Trajectory:
-        age, N, beds, beds_missing, phys, G, rho, hic = getattr(ctx, '_epi_static', None) or self._static(ctx)
-        ctx._epi_static = (age, N, beds, beds_missing, phys, G, rho, hic)
+        age, N, beds, beds_missing, phys, G, rho, hic, ifr_age = getattr(ctx, '_epi_static', None) or self._static(ctx)
+        ctx._epi_static = (age, N, beds, beds_missing, phys, G, rho, hic, ifr_age)
         L, C, T = ctx.L, ctx.C, ctx.steps
         Ni = np.maximum(N.round().astype(np.int64), 0)
         S = Ni.copy()
@@ -116,7 +135,7 @@ class Epidemiology(Module):
         S[seed_loc, 1] -= int(p['seed'])
         sigma, gamma = 1 / p['latent_days'], 1 / p['infectious_days']
         beta_c = p['r0'] * gamma / rho
-        ifr = np.minimum(IFR_BASE * p['severity'], 0.5)
+        ifr = np.minimum(ifr_age * p['severity'], 0.5)  # (C, 3)
         asc = np.clip(p['ascertainment'] * np.sqrt(phys / 2.0), 0.02, 0.6)
         surge_beds = beds / 1000 * ctx.c_pop * p['surge_bed_share']
         Tm = ctx.travel_matrix(p['travel_rate'])
@@ -176,10 +195,10 @@ class Epidemiology(Module):
                 out_I = rng.binomial(I, 1 - np.exp(-gamma))
                 # deaths among resolving infections, with overflow beyond surge beds
                 inf_c = np.bincount(ctx.loc_c, weights=I.sum(1), minlength=C)
-                demand = inf_c * (ifr @ AGE_DEFAULT) * p['hosp_per_death'] * gamma * p['infectious_days']
+                demand = inf_c * (ifr * age).sum(1) * p['hosp_per_death'] * gamma * p['infectious_days']
                 load = demand / np.maximum(surge_beds, 1)
                 over = np.clip(1 - 1 / np.maximum(load, 1e-9), 0, 1)  # share of hospital demand beyond capacity
-                ifr_loc = ifr[None, :] * (1 + (p['overflow_mult'] - 1) * over[ctx.loc_c, None])
+                ifr_loc = ifr[ctx.loc_c] * (1 + (p['overflow_mult'] - 1) * over[ctx.loc_c, None])
                 new_D = rng.binomial(out_I, np.clip(ifr_loc, 0, 1))
                 S -= new_E
                 E += new_E - new_I

@@ -11,7 +11,7 @@ SPARSE = {'SI.POV.GINI', 'SH.MED.BEDS.ZS', 'SH.MED.PHYS.ZS'}  # irregular survey
 # (e.g. CAF life expectancy 18.8 in 2022, FJI 574 mobile subscriptions per 100 in 2024). Age keys: 0-100.
 PLAUSIBLE = {
     'population': (5e2, 2e9), 'population_female': (2e2, 1e9), 'population_male': (2e2, 1e9), 'urban_pct': (0, 100),
-    'life_expectancy': (25, 95), 'gdp_usd': (1e7, 5e13), 'gdp_ppp': (1e7, 5e13), 'gdp_per_capita_usd': (50, 3e5),
+    'life_expectancy': (25, 95), 'gdp_usd': (1e7, 5e13), 'merch_exports_usd': (0, 1e13), 'gdp_ppp': (1e7, 5e13), 'gdp_per_capita_usd': (50, 3e5),
     'gdp_growth_pct': (-70, 160), 'inflation_pct': (-40, 1e5), 'unemployment_pct': (0, 60), 'internet_users_pct': (0, 100),
     'mobile_subs_per100': (0, 450), 'hospital_beds_per1000': (0, 30), 'physicians_per1000': (0, 15), 'gini': (15, 75),
 }
@@ -34,6 +34,7 @@ CORE = [
     ('NY.GDP.MKTP.PP.CD', 'gdp_ppp', 'GDP, PPP', 'current international $'),
     ('NY.GDP.PCAP.CD', 'gdp_per_capita_usd', 'GDP per capita', 'current US$'),
     ('NY.GDP.MKTP.KD.ZG', 'gdp_growth_pct', 'GDP growth', 'annual %'),
+    ('TX.VAL.MRCH.CD.WT', 'merch_exports_usd', 'Merchandise exports (WTO, via WDI)', 'current US$'),
     ('FP.CPI.TOTL.ZG', 'inflation_pct', 'Inflation, consumer prices', 'annual %'),
     ('SL.UEM.TOTL.ZS', 'unemployment_pct', 'Unemployment (modeled ILO estimate)', '% of labor force'),
     ('IT.NET.USER.ZS', 'internet_users_pct', 'Individuals using the Internet', '% of population'),

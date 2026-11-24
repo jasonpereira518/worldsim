@@ -18,12 +18,12 @@ REAL = SNAP / (SNAP / 'LATEST').read_text().strip() if (SNAP / 'LATEST').exists(
 pytestmark = pytest.mark.skipif(REAL is None or not (REAL / 'admin1.parquet').exists(), reason='real data snapshot not present')
 CASES = [json.loads(l) for l in (Path(__file__).resolve().parents[1] / 'evals' / 'scale_cases.jsonl').read_text().splitlines() if l.strip()]
 WITHIN_10X = ('below', 'comparable', 'above')
-# 2026-11-24 baseline on snapshot 2026-10-23: reach 10/11, magnitude 7/10. Epicenters come from the 1:10m gazetteer;
-# quakes count affected provinces inside a "Rest of <country>" location (Trajectory.affected_places); the rupture is a
-# line with a strike drawn per run, so sites along the fault shake harder (Kahramanmaras and Gorkha reach their
-# neighbors, Kumamoto spans places). Misses: the iPhone global (multi-country); novel-pathogen defaults land far above
-# H1N1 and SARS; Gorkha deaths far above the record.
-REACH_FLOOR, BAND_FLOOR = 9, 6
+# 2026-11-24 baseline on snapshot 2026-11-24: reach 8/11, magnitude 7/10. Epicenters from the 1:10m gazetteer; quakes
+# count affected provinces (Trajectory.affected_places) and shake from a line rupture through the published Allen, Wald &
+# Worden (2012) equation. Misses: Kahramanmaras and Gorkha regional (recorded multi-country: Syria and India sit outside
+# the published equation's MMI >= 7 zone; the uncited relation before it reached them, 10/11), the iPhone global
+# (multi-country); novel-pathogen defaults land far above H1N1 and SARS; Gorkha deaths about 25x the record.
+REACH_FLOOR, BAND_FLOOR = 7, 6
 
 
 def evaluate(w, case, assessor=False):

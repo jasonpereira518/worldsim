@@ -190,7 +190,7 @@ def test_stream_sends_scale_and_replays_without_calls(llm_on, monkeypatch):
 
 CALIBRATION = {'proposals': [
     {'key': 'prior:depth_km', 'value': 12.0, 'low': 10.0, 'high': 20.0, 'rationale': 'Marmara events are shallow crustal ruptures.', 'evidence': ['prior:depth_km']},
-    {'key': 'attenuation', 'value': 9.0, 'low': 1.0, 'high': 9.0, 'rationale': 'Wider than allowed.', 'evidence': ['prior:attenuation']},
+    {'key': 'intensity_offset', 'value': 9.0, 'low': -9.0, 'high': 9.0, 'rationale': 'Wider than allowed.', 'evidence': ['prior:intensity_offset']},
     {'key': 'beta', 'value': 0.2, 'low': None, 'high': None, 'rationale': 'No citation.', 'evidence': ['analog:not_retrieved']},
     {'key': 'magnitude', 'value': 7.0, 'low': None, 'high': None, 'rationale': 'The user set this.', 'evidence': ['prior:depth_km']},
     {'key': 'made_up', 'value': 1.0, 'low': None, 'high': None, 'rationale': 'Not a parameter.', 'evidence': ['prior:depth_km']},
@@ -217,9 +217,9 @@ def test_calibrator_clamps_and_requires_evidence(llm_on):
     assert step.status == 'done' and step.summary.startswith('Set 2 parameters') and 'discarded 3' in step.summary
     apply(run.config.spec)
     llm_rows = {a.id: a for a in run.config.spec.assumptions if a.origin == 'llm'}
-    assert set(llm_rows) == {'depth_km', 'attenuation'}  # uncited, user-locked (magnitude) and unknown keys dropped
-    att = llm_rows['attenuation']
-    assert (att.low, att.high, att.value) == (2.6, 3.4, 3.4)  # cannot widen the code range; value clamped into it
+    assert set(llm_rows) == {'depth_km', 'intensity_offset'}  # uncited, user-locked (magnitude) and unknown keys dropped
+    att = llm_rows['intensity_offset']
+    assert (att.low, att.high, att.value) == (-0.7, 0.7, 0.7)  # cannot widen the code range; value clamped into it
     apply_llm_assumptions(run.priors, run.config.spec, run.overrides)
     depth = next(p for p in run.priors if p.key == 'depth_km')
     assert (depth.value, depth.low, depth.high, depth.origin) == (12.0, 10.0, 20.0, 'llm') and depth.source.startswith('calibrator (AI)')

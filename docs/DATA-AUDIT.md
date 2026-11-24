@@ -19,8 +19,8 @@ Tiers used below:
 | | Verified (G, P) | Fit or Partial | Guess | Total |
 |---|---|---|---|---|
 | Datasets | 4 | – | 5 | 9 |
-| Model priors | 8 | 6 | 48 | 62 |
-| Model constants | 1 | – | 5 | 6 |
+| Model priors | 9 | 6 | 47 | 62 |
+| Model constants | 2 | – | 4 | 6 |
 | Analogs (past events) | 17 | – | 2 | 19 |
 
 Three quarters of the model priors are guesses. Most carry wide ranges and low confidence, which the ensemble propagates, but the product does not yet tell a reader which numbers are guesses. User-stated values (price, magnitude, tariff rate) are the scenario's premise and are not audited.
@@ -29,7 +29,7 @@ Three quarters of the model priors are guesses. Most carry wide ranges and low c
 
 | Dataset | Publisher | Tier | Used for | Note |
 |---|---|---|---|---|
-| World Development Indicators | World Bank | G | Population, age shares, GDP per capita, Gini, internet use, hospital beds, physicians | |
+| World Development Indicators | World Bank | G | Population, 5-year age bands, GDP per capita, Gini, internet use, hospital beds, physicians, merchandise exports (WTO data) | |
 | Country classification | World Bank | G | Income group, region | |
 | EDGAR XBRL company facts | U.S. SEC | G | Company financials, supplier revenue shares | |
 | Legal Entity Identifiers | GLEIF | G | Company legal identity, headquarters | GLEIF is overseen by a committee of public regulators (FSB / G20 mandate) |
@@ -68,14 +68,14 @@ Three quarters of the model priors are guesses. Most carry wide ranges and low c
 | `domestic_mixing`, `ascertainment`, `report_lag`, `seed`, `vaccine_rate` | Guess | Analyst priors |
 | Policy menu ranges (lockdown, border closure) | Guess | Cites the Oxford COVID-19 Government Response Tracker (Hale et al. 2021, peer-reviewed), but thresholds and lags are not fitted to it |
 
-### Disaster: earthquakes (14 model priors: 1 verified, 3 fit or partial, 10 guesses)
+### Disaster: earthquakes (14 model priors: 2 verified, 3 fit or partial, 9 guesses)
 
 | Prior | Tier | Source or reason |
 |---|---|---|
 | `rupture_factor` | P | Wells & Coppersmith (1994) subsurface rupture length; the 0.7–1.6 factor is ours |
 | `theta_rich`, `beta` | Fit | USGS PAGER form (Jaiswal & Wald 2010), fitted by us to six historical death tolls from national agencies |
 | `theta_drop` | Partial | PAGER form; the size of the drop is ours |
-| `attenuation` | Guess | Uncited "simplified isoseismal relation". At damaging distances it is within about 0.2 MMI of a published intensity prediction equation |
+| `intensity_offset` | P | Allen, Wald & Worden (2012), rupture-distance intensity prediction equation (coefficients as implemented in OpenQuake); the ±0.7 MMI range is its standard deviation. Replaced an uncited relation that shook distant sites 0.4–0.7 MMI harder |
 | `depth_km`, `urban_density` | Guess | Analyst priors |
 | `injury_ratio`, `displacement`, `capital_ratio` | Guess | Analyst priors |
 | `restore_days`, `return_days`, `aid_days`, `report_days` | Guess | Analyst priors |
@@ -87,7 +87,7 @@ Three quarters of the model priors are guesses. Most carry wide ranges and low c
 |---|---|---|
 | `passthrough` | P | Amiti, Redding & Weinstein (2019) |
 | `elasticity` | P | Broda & Weinstein (2006); Imbs & Mejean (2015) |
-| `export_share` | Partial | Gravity form (Disdier & Head 2008); a single global 0.22 where WDI publishes each country's export share |
+| `export_share` | Partial | Fallback only: each exporter's goods exports are WDI merchandise exports (WTO data, G) for 206 of 226 countries; the 0.22 share of GDP covers the rest |
 | `product_share` | Guess | No bilateral product data |
 | `adjust_weeks`, `diversion`, `multiplier` | Guess | Analyst priors |
 | `retaliation_prob`, `retaliation_week`, `retaliation_share` | Guess | Analyst priors (the 2018–2019 rounds inform them only loosely) |
@@ -101,7 +101,7 @@ Three quarters of the model priors are guesses. Most carry wide ranges and low c
 | Constant | Tier | Note |
 |---|---|---|
 | Income distribution per country | G | Lognormal fitted to WDI GDP per capita and Gini (σ from Gini is exact for a lognormal) |
-| `IFR_BASE` (0.03% / 0.2% / 2% by age) | Guess | Age-specific fatality shape; uncited |
+| Age fatality curve | P | Verity et al. (2020) infection fatality ratio by decade, weighted by each country's WDI 5-year age bands (G); `severity` scales it (world IFR 0.62% at 1×) |
 | `vulnerability()` (θ from GDP per capita) | Guess | Our log-linear mapping between $1,000 and $60,000 |
 | `STANCE_BANDS` (crowd behavior multipliers) | Guess | Our bands per label |
 | Scale thresholds (100 people, 0.01%, 25%, 25 countries on 3 continents) | Guess | Definitions, not estimates; they should be labeled as conventions |
@@ -127,10 +127,8 @@ Two are guesses:
 
 1. **Label tiers in the product.** Add a tier to every prior and assumption, and show "unverified" on assumption chips and in the report appendix. This satisfies "clearly labeled" for all 48 guesses at once and is the cheapest step.
 2. **City populations.** Replace Natural Earth `pop_max` with UN DESA World Urbanization Prospects (city agglomerations) and the EU JRC Global Human Settlement Layer population grid. This moves persona placement and quake exposure onto G sources.
-3. **Epidemiology fatality curve.** Replace `IFR_BASE` with a peer-reviewed age-specific curve (for example Verity et al. 2020 for a COVID-like profile, or a published H1N1 systematic review) and keep `severity` as the scenario dial.
-4. **Quick verified swaps:**
-   - `export_share`: use WDI's per-country exports share of GDP.
-   - `attenuation`: replace the uncited relation with a published intensity prediction equation (Allen, Wald & Worden 2012) and refit θ.
+3. ~~**Epidemiology fatality curve.**~~ Done 2026-11-24: Verity et al. (2020) by decade, weighted by WDI age bands.
+4. ~~**Quick verified swaps.**~~ Done 2026-11-24: WDI merchandise exports per country; Allen, Wald & Worden (2012) intensity with θ refit to 13.2 (deaths: five of six within 4×, Gorkha 25×; scale reach 8/11, down from 10/11).
 5. **Trade inputs:**
    - `product_share`: UN Comtrade (UN Statistics Division).
    - `multiplier`: OECD Trade in Value Added.

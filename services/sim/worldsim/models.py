@@ -14,7 +14,7 @@ Tier = Literal['user', 'government', 'peer_reviewed', 'fit', 'partial', 'guess']
 SOURCE_TIERS: dict[str, Tier] = {
     'latent_days': 'government', 'infectious_days': 'government', 'income_proxy': 'government',
     'bass_p': 'peer_reviewed', 'bass_q': 'peer_reviewed', 'r0': 'peer_reviewed', 'rupture_factor': 'peer_reviewed',
-    'passthrough': 'peer_reviewed', 'elasticity': 'peer_reviewed',
+    'passthrough': 'peer_reviewed', 'elasticity': 'peer_reviewed', 'intensity_offset': 'peer_reviewed',
     'theta_rich': 'fit', 'beta': 'fit',
     'severity': 'partial', 'vaccine_day': 'partial', 'theta_drop': 'partial', 'export_share': 'partial',
 }

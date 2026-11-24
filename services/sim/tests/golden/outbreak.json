@@ -4,32 +4,32 @@
  "median_member": 3,
  "metrics": {
   "Deaths": [
-   121.65,
-   373.75,
-   1216.5,
-   21915.75,
-   37697.85
+   117.7,
+   384.25,
+   1247.0,
+   23548.0,
+   40590.6
   ],
   "Infections (true)": [
-   124530.65,
-   235239.75,
-   690293.0,
-   8003426.25,
-   20365820.55
+   123898.15,
+   224614.0,
+   689375.0,
+   7743129.0,
+   19940560.15
   ],
   "Reported cases": [
-   9952.0265,
-   26627.2838,
-   63562.6079,
-   450772.0898,
-   1105390.6864
+   9901.1115,
+   25296.0857,
+   63271.9896,
+   437419.5362,
+   1082707.0972
   ],
   "Countries with community transmission": [
    2.35,
    3.75,
-   4.5,
-   22.0,
-   30.2
+   5.0,
+   26.5,
+   29.95
   ],
   "Countries with hospitals over surge capacity": [
    0.0,
@@ -39,11 +39,11 @@
    1.0
   ],
   "Days until 10 countries have transmission": [
-   71.1,
-   71.5,
-   72.0,
-   74.0,
-   75.6
+   72.1,
+   72.5,
+   73.0,
+   74.5,
+   75.7
   ],
   "Global peak of active infections": [
    90.0,
@@ -59,7 +59,8 @@
   "Community transmission in China",
   "Community transmission in Thailand",
   "Community transmission in India",
-  "Community transmission in United States of America"
+  "Community transmission in United States of America",
+  "Community transmission in Japan"
  ],
- "bubbles": 102
+ "bubbles": 101
 }
